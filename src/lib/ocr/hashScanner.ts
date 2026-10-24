@@ -11,7 +11,7 @@
  */
 
 import { ensureCardHashes, type CardHashEntry, type PackedClass } from '../data/cardHashes';
-import { CARD_ZONE } from './cardScanner';
+import { cardZoneForFrame } from './cardScanner';
 import {
   computePHashFromRGBA,
   hammingPacked,
@@ -41,18 +41,24 @@ const MAX_CROP_WIDTH = 640;
 
 /**
  * Crops the hashed region out of a full-frame canvas. The region (fractions of
- * CARD_ZONE, from the loaded index) is mapped onto the full frame exactly like
- * the OCR regions in cardScanner.ts. Returns null when the crop is too small
+ * the card zone, from the loaded index) is mapped onto the full frame using the
+ * same true 5:7 card rectangle the framing guide and OCR regions use — see
+ * cardZoneForFrame() in cardScanner.ts. Returns null when the crop is too small
  * to be meaningful.
  */
 function cropHashRegion(
   frame: HTMLCanvasElement,
   region: { x0: number; y0: number; x1: number; y1: number }
 ): PixelBuffer | null {
-  const fx0 = CARD_ZONE.x0 + region.x0 * (CARD_ZONE.x1 - CARD_ZONE.x0);
-  const fy0 = CARD_ZONE.y0 + region.y0 * (CARD_ZONE.y1 - CARD_ZONE.y0);
-  const fx1 = CARD_ZONE.x0 + region.x1 * (CARD_ZONE.x1 - CARD_ZONE.x0);
-  const fy1 = CARD_ZONE.y0 + region.y1 * (CARD_ZONE.y1 - CARD_ZONE.y0);
+  // Follow the on-screen card zone — a true 5:7 card rectangle for this frame's
+  // aspect (see cardZoneForFrame) — so the hashed crop matches exactly where the
+  // user lines the card up against the dashed guide, and the geometry the index
+  // was built with (scripts/rebuild-hashes-offline.js / prepare-hashes.js).
+  const zone = cardZoneForFrame(frame.width / frame.height);
+  const fx0 = zone.x0 + region.x0 * (zone.x1 - zone.x0);
+  const fy0 = zone.y0 + region.y0 * (zone.y1 - zone.y0);
+  const fx1 = zone.x0 + region.x1 * (zone.x1 - zone.x0);
+  const fy1 = zone.y0 + region.y1 * (zone.y1 - zone.y0);
 
   const sx = frame.width * fx0;
   const sy = frame.height * fy0;

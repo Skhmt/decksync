@@ -7,6 +7,7 @@
     "prepare:data": "node --max-old-space-size=4096 scripts/prepare-data.js",
     "prepare:hashes": "set DECKSYNC_HASH_ALL=1 && node scripts/prepare-hashes.js",
     "topup:hashes": "node scripts/topup-hashes.js",
+    "rebuild:hashes": "node scripts/rebuild-hashes-offline.js",
     "predev": "npm run prepare:data",
     "dev": "vite",
     "host": "vite --host",

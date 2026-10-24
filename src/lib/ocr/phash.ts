@@ -32,22 +32,24 @@ export interface FrameRectLike {
 }
 
 /**
- * The card-zone region (fractions of CARD_ZONE) hashed for identification.
- * The user lines the card up against the dashed guide so it fills the zone
- * height; this box then covers the central art area — inside the art window of
- * every frame style (old frames, modern frames, full-art), never touching the
- * name bar or text box. MUST stay in sync with scripts/prepare-hashes.js,
- * which crops the same fractions out of a synthetic zone render (the values
+ * The card-zone region (fractions of the 5:7 card zone, cardZoneForFrame())
+ * hashed for identification. The user lines the card up against the dashed
+ * guide so it fills the zone; this box then covers the central art area — inside
+ * the art window of every frame style (old frames, modern frames, full-art),
+ * never touching the name bar or text box. MUST stay in sync with the build
+ * scripts (scripts/prepare-hashes.js and scripts/rebuild-hashes-offline.js),
+ * which crop the same fractions out of a synthetic 5:7 zone render (the values
  * are also written into card-hashes.bin so the app reads them from there).
  */
 export const HASH_ART_REGION = { x0: 0.25, y0: 0.20, x1: 0.75, y1: 0.60 };
 
 /**
- * Camera aspect classes. The card's relative size inside the zone depends on
- * the frame aspect ratio (a portrait card in a landscape zone), so stored
- * hashes are built per class and the app matches against its own class.
- * `r` is the zone's width/height ratio for that class: r = 0.64·(frameW/frameH)/0.80 —
- * 1.067 for a 4:3 camera, 1.422 for a 16:9 one.
+ * Camera aspect classes — kept for binary-index format compatibility. The card
+ * zone is now a true 5:7 rectangle (cardZoneForFrame) whose shape does NOT depend
+ * on the camera aspect, so every class carries identical hashes and the app can
+ * match against whichever class hashAspectClassKey() selects. `r` is the legacy
+ * per-class zone width/height ratio (no longer used by the build); the two keys
+ * simply preserve the two-slot layout of card-hashes.bin.
  */
 export const HASH_ASPECT_CLASSES = [
   { key: '43', r: (0.64 * (4 / 3)) / 0.8, maxR: 1.2 },

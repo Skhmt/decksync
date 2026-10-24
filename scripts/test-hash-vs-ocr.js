@@ -3,7 +3,7 @@
  * pHash vs OCR benchmark for DeckSync camera scanning.
  *
  * Simulates photographed cards (tilt, size, JPEG compression) with the exact
- * geometry the app uses — card centered in CARD_ZONE, art region cropped as
+ * geometry the app uses — card filling the true 5:7 card zone, art region cropped as
  * HASH_ART_REGION fractions of the zone — then measures both identification
  * channels against those simulations:
  *
@@ -44,9 +44,21 @@ const HASH_FILE = path.join(ROOT, 'public', 'card-hashes.bin');
 const CARD_DATA_FILE = path.join(ROOT, 'public', 'card-data.json');
 const TESS_DIR = path.join(ROOT, 'public', 'tess');
 
-// Same zone / table geometry as scripts/prepare-hashes.js and the app's guide
-const ZONE = { x0: 0.18, y0: 0.10, x1: 0.82, y1: 0.90 };
+// The card zone is a true 5:7 MTG-card rectangle (cardZoneForFrame in
+// cardScanner.ts); its shape no longer depends on the camera aspect. Keep
+// CARD_ASPECT in sync with src/lib/ocr/cardScanner.ts.
+const CARD_ASPECT = 2.5 / 3.5;
 const BG = { r: 90, g: 85, b: 75 };
+
+/** Fit a centered 5:7 (CARD_ASPECT) box in pixel terms inside the frame — mirrors cardZoneForFrame(). */
+function cardBox(frameW, frameH, margin = 0.05) {
+  const availW = frameW * (1 - 2 * margin);
+  const availH = frameH * (1 - 2 * margin);
+  const aspect = frameW / frameH;
+  const fh = Math.min(availH, (availW * aspect) / CARD_ASPECT);
+  const fw = (CARD_ASPECT / aspect) * fh;
+  return { x: Math.round((frameW - fw) / 2), y: Math.round((frameH - fh) / 2), w: Math.round(fw), h: Math.round(fh) };
+}
 
 // Benchmark matrix (kept small on purpose — each photo costs a sharp render)
 const TILTS = [0, 6, 12];
@@ -78,32 +90,30 @@ function cropFraction(pix, rect) {
 }
 
 /**
- * Renders a simulated camera photo: the official face centered in the zone of
- * a full frame (frame aspect = class), scaled to `fill` of the zone height,
- * rotated by `tilt`, JPEG-compressed. Returns the RGBA of the zone crop —
- * exactly what the app would hash / OCR.
+ * Renders a simulated camera photo: the official face centered in the true 5:7
+ * card zone of a full frame, scaled to `fill` of the zone height, rotated by
+ * `tilt`, JPEG-compressed. Returns the RGBA of the zone crop — exactly what the
+ * app would hash / OCR. The camera aspect no longer affects the geometry (the
+ * zone is always 5:7), so a fixed frame is used; `cls` is kept for call-site
+ * compatibility but no longer changes the render.
  */
 async function simulatePhoto(faceBytes, cls, tilt, fill) {
-  const a = (cls.r * 0.8) / 0.64; // frame aspect for this class
   const fw = 1920;
-  const fh = Math.round(fw / a);
-  const zw = Math.round((ZONE.x1 - ZONE.x0) * fw);
-  const zh = Math.round((ZONE.y1 - ZONE.y0) * fh);
-  const zx = Math.round(ZONE.x0 * fw);
-  const zy = Math.round(ZONE.y0 * fh);
+  const fh = Math.round(fw / (4 / 3)); // fixed frame; zone shape is camera-independent
+  const box = cardBox(fw, fh);
 
   const meta = await sharp(faceBytes).metadata();
-  const H = Math.max(8, Math.round(zh * fill));
+  const H = Math.max(8, Math.round(box.h * fill));
   const W = Math.max(8, Math.round(H * meta.width / meta.height));
   const resized = await sharp(faceBytes).resize(W, H).jpeg({ quality: JPEG_Q }).toBuffer();
   const rot = tilt === 0 ? resized : await sharp(resized).rotate(tilt, { background: BG }).toBuffer();
   const rm = await sharp(rot).metadata();
 
   const frame = await sharp({ create: { width: fw, height: fh, channels: 3, background: BG } })
-    .composite([{ input: rot, left: zx + Math.round((zw - rm.width) / 2), top: zy + Math.round((zh - rm.height) / 2) }])
+    .composite([{ input: rot, left: box.x + Math.round((box.w - rm.width) / 2), top: box.y + Math.round((box.h - rm.height) / 2) }])
     .jpeg({ quality: JPEG_Q })
     .toBuffer();
-  return cropFraction(await rawRGBA(frame), ZONE);
+  return cropFraction(await rawRGBA(frame), { x0: box.x / fw, y0: box.y / fh, x1: (box.x + box.w) / fw, y1: (box.y + box.h) / fh });
 }
 
 /** Encodes an RGBA crop as a PNG buffer (Node's tesseract worker needs encoded images). */

@@ -74,15 +74,7 @@ export function cardZoneForFrame(frameAspect: number): FrameRect {
   return { x0: (1 - fw) / 2, y0: (1 - fh) / 2, x1: (1 + fw) / 2, y1: (1 + fh) / 2 };
 }
 
-/**
- * Fixed crop rectangle used by the pHash channel only (see hashScanner.ts). It
- * matches the geometry scripts/prepare-hashes.js used to build
- * public/card-hashes.bin, so the existing index still loads and matches without
- * being regenerated. The OCR regions and the framing guide instead use
- * cardZoneForFrame() — a true 5:7 card rectangle; regenerating the hash index
- * against that zone would align the two channels fully.
- */
-export const CARD_ZONE: FrameRect = { x0: 0.18, y0: 0.10, x1: 0.82, y1: 0.90 };
+
 
 /**
  * Card layout regions as fractions of the card zone (cardZoneForFrame()). The

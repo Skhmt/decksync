@@ -244,6 +244,8 @@ const BG = { r: 90, g: 85, b: 75 };
 
 /** Width (px) of the synthetic zone canvas used for pre-build renders. */
 const ZONE_RENDER_WIDTH = 1024;
+// Keep in sync with CARD_ASPECT in src/lib/ocr/cardScanner.ts (2.5" x 3.5").
+const CARD_ASPECT = 2.5 / 3.5;
 
 /** Crops a centered rectangle (fractions of the buffer) out of an RGBA buffer. */
 function cropFraction(rgba, width, height, rect) {
@@ -262,48 +264,50 @@ function cropFraction(rgba, width, height, rect) {
 }
 
 /**
- * Renders the official face into a synthetic camera zone and returns the pHash
+ * Renders the official face into a synthetic 5:7 card zone and returns the pHash
  * of HASH_ART_REGION for every stored variant (fill × angle). The card is
  * centered in the zone, scaled to `fill` of the zone height and rotated by
- * `angle` — exactly the geometry the app's CARD_ZONE guide promises, so a
- * photographed card matches its own variant at near-perfect distance.
- * Variant order: fill outer, angle inner (see HASH_STORE_FILLS / HASH_STORE_ANGLES).
+ * `angle` — exactly the geometry the app's framing guide / OCR / pHash crops use
+ * (cardZoneForFrame), so a photographed card matches its own variant at
+ * near-perfect distance. The zone is camera-independent (always 5:7), so every
+ * aspect class carries identical hashes. Variant order: fill outer, angle inner
+ * (see HASH_STORE_FILLS / HASH_STORE_ANGLES). Keep in sync with
+ * scripts/rebuild-hashes-offline.js.
  */
 async function buildFaceHashes(bytes) {
   const meta = await sharp(bytes).metadata();
-  const result = {};
-  for (const cls of HASH_ASPECT_CLASSES) {
-    const zw = ZONE_RENDER_WIDTH;
-    const zh = Math.round(zw / cls.r);
-    const list = [];
-    for (const fill of HASH_STORE_FILLS) {
-      const H = Math.max(8, Math.round(zh * fill));
-      const W = Math.max(8, Math.round(H * meta.width / meta.height));
-      const resized = await sharp(bytes).resize(W, H).png().toBuffer();
-      for (const ang of HASH_STORE_ANGLES) {
-        const rot = ang === 0 ? resized : await sharp(resized).rotate(ang, { background: BG }).png().toBuffer();
-        const rm = await sharp(rot).metadata();
-        // Canvas must fit the rotated card; the zone is its central zw×zh rect
-        const cw = Math.max(zw, rm.width);
-        const ch = Math.max(zh, rm.height);
-        const canvas = await sharp({ create: { width: cw, height: ch, channels: 3, background: BG } })
-          .composite([{ input: rot, left: Math.round((cw - rm.width) / 2), top: Math.round((ch - rm.height) / 2) }])
-          .png()
-          .toBuffer();
-        const { data, info } = await sharp(canvas).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-        // Zone (centered in the canvas), then the art region inside the zone
-        const zone = cropFraction(data, info.width, info.height, {
-          x0: (cw - zw) / 2 / cw,
-          y0: (ch - zh) / 2 / ch,
-          x1: 1 - (cw - zw) / 2 / cw,
-          y1: 1 - (ch - zh) / 2 / ch
-        });
-        const art = cropFraction(zone.data, zone.width, zone.height, HASH_ART_REGION);
-        list.push(computePHashFromRGBA(art));
-      }
+  const zw = ZONE_RENDER_WIDTH;
+  const zh = Math.round(zw / CARD_ASPECT); // 5:7 zone, independent of camera aspect
+  const list = [];
+  for (const fill of HASH_STORE_FILLS) {
+    const H = Math.max(8, Math.round(zh * fill));
+    const W = Math.max(8, Math.round(H * meta.width / meta.height));
+    const resized = await sharp(bytes).resize(W, H).png().toBuffer();
+    for (const ang of HASH_STORE_ANGLES) {
+      const rot = ang === 0 ? resized : await sharp(resized).rotate(ang, { background: BG }).png().toBuffer();
+      const rm = await sharp(rot).metadata();
+      // Canvas must fit the rotated card; the zone is its central zw×zh rect.
+      const cw = Math.max(zw, rm.width);
+      const ch = Math.max(zh, rm.height);
+      const canvas = await sharp({ create: { width: cw, height: ch, channels: 3, background: BG } })
+        .composite([{ input: rot, left: Math.round((cw - rm.width) / 2), top: Math.round((ch - rm.height) / 2) }])
+        .png()
+        .toBuffer();
+      const { data, info } = await sharp(canvas).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      // Zone (centered in the canvas), then the art region inside the zone.
+      const zone = cropFraction(data, info.width, info.height, {
+        x0: (cw - zw) / 2 / cw,
+        y0: (ch - zh) / 2 / ch,
+        x1: 1 - (cw - zw) / 2 / cw,
+        y1: 1 - (ch - zh) / 2 / ch
+      });
+      const art = cropFraction(zone.data, zone.width, zone.height, HASH_ART_REGION);
+      list.push(computePHashFromRGBA(art));
     }
-    result[cls.key] = list;
   }
+  // Zone is camera-independent → every aspect class stores identical hashes.
+  const result = {};
+  for (const cls of HASH_ASPECT_CLASSES) result[cls.key] = list;
   return result;
 }
 
