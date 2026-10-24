@@ -63,6 +63,15 @@
   // True while a continuous attempt is OCR-ing / looking up (drives the status)
   let continuousBusy = $state(false);
 
+  // --- Auto-action for the confirm prompt ----------------------------------
+  // A found card resolves itself after this long: in-deck cards are added,
+  // not-in-deck cards are dismissed — unless the user taps Add/Decline (or taps
+  // outside) first. The bar under the prompt counts down to that moment.
+  const AUTO_ACTION_MS = 5000;
+  let autoProgress = $state(0);   // 0..1, drives the countdown bar width
+  let autoStartedAt = 0;          // wall-clock start of the current countdown
+  let autoRaf = 0;                // active requestAnimationFrame id (0 = none)
+
   // Dedup bookkeeping (plain lets — internal, never rendered)
   let lastHitKey = '';
   let lastHitAt = 0;
@@ -95,6 +104,8 @@
     return () => {
       scanToken++;
       stopStream();
+      stopAutoAction();
+      pendingHit = null;
     };
   });
 
@@ -249,6 +260,7 @@
     // which dismisses the previous modal automatically.
     const deckCard = matchDeckCard(deckStore.cards, card) ?? null;
     pendingHit = { key, card, deckCard, method };
+    startAutoAction();
     buzz(80);
   }
 
@@ -270,10 +282,46 @@
   }
 
   function dismissPendingHit(key: string) {
+    stopAutoAction();
+    autoProgress = 0;
     pendingHit = null;
     // Restart the cooldown so a card we just decided on doesn't re-prompt immediately
     lastHitKey = key;
     lastHitAt = Date.now();
+  }
+
+  /** Begin the auto-action countdown for the current pending hit. */
+  function startAutoAction() {
+    stopAutoAction();
+    autoStartedAt = Date.now();
+    autoProgress = 0;
+    const tick = () => {
+      if (!pendingHit) return; // dismissed while waiting
+      const p = Math.min(1, (Date.now() - autoStartedAt) / AUTO_ACTION_MS);
+      autoProgress = p;
+      if (p >= 1) {
+        runAutoAction();
+        return; // countdown complete — stop the loop
+      }
+      autoRaf = requestAnimationFrame(tick);
+    };
+    autoRaf = requestAnimationFrame(tick);
+  }
+
+  /** Stop any running countdown without acting. */
+  function stopAutoAction() {
+    if (autoRaf) {
+      cancelAnimationFrame(autoRaf);
+      autoRaf = 0;
+    }
+  }
+
+  /** The action the countdown resolves to: add in-deck cards, dismiss the rest. */
+  function runAutoAction() {
+    const hit = pendingHit;
+    if (!hit) return;
+    if (hit.deckCard) confirmPendingHit();
+    else declinePendingHit();
   }
 
   function buzz(pattern: number | number[]) {
@@ -443,7 +491,11 @@
 
           <!-- Continuous mode: confirm a found card (camera keeps running behind it) -->
           {#if pendingHit}
+            <!-- Backdrop: tapping anywhere outside the prompt cancels / dismisses it -->
+            <div class="absolute inset-0 z-10" role="presentation" onclick={declinePendingHit}></div>
+
             <div class="absolute inset-x-0 bottom-2 z-20 flex justify-center px-2 pointer-events-none">
+              {#key pendingHit.key}
               <div
                 role="dialog"
                 aria-label="Confirm scanned card"
@@ -497,7 +549,21 @@
                     Decline
                   </button>
                 </div>
+
+                <!-- Countdown: resolves the prompt automatically after a few seconds -->
+                <div class="mt-3">
+                  <p class="mb-1 text-[10px] text-base-content/50">
+                    {pendingHit.deckCard ? 'Adding automatically…' : 'Dismissing automatically…'}
+                  </p>
+                  <div class="h-1.5 w-full overflow-hidden rounded-full bg-base-200">
+                    <div
+                      class="h-full rounded-full {pendingHit.deckCard ? 'bg-success' : 'bg-warning'}"
+                      style="width: {autoProgress * 100}%"
+                    ></div>
+                  </div>
+                </div>
               </div>
+              {/key}
             </div>
           {/if}
 
