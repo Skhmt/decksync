@@ -34,6 +34,18 @@ export class DeckState {
     this.cards.reduce((sum, c) => sum + Math.min(c.verifiedCount, c.targetCount), 0)
   );
 
+  totalFoundCards = $derived(
+    this.cards.reduce((sum, c) => sum + (c.verifiedCount ?? 0), 0)
+  );
+
+  totalMissingCards = $derived(
+    this.cards.reduce((sum, c) => sum + Math.max(0, c.targetCount - (c.verifiedCount ?? 0)), 0)
+  );
+
+  totalExtraCards = $derived(
+    this.cards.reduce((sum, c) => sum + Math.max(0, (c.verifiedCount ?? 0) - c.targetCount), 0)
+  );
+
   verificationPercentage = $derived(
     this.totalExpectedCards > 0
       ? Math.round((this.totalVerifiedCards / this.totalExpectedCards) * 100)

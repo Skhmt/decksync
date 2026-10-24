@@ -2,7 +2,7 @@
   import type { DeckCardItem } from "../types";
   import { deckStore } from "../state/deck.svelte";
   import { getCardImageUrl } from "../api/scryfall";
-  import { boltIconSvg, cameraIconSvg, checkIconSvg, flipIconSvg } from "../icons";
+  import { boltIconSvg, cameraIconSvg, checkIconSvg, flipIconSvg, warningIconSvg } from "../icons";
 
   let { card }: { card: DeckCardItem } = $props();
 
@@ -11,9 +11,10 @@
     Boolean(card.scryfall?.card_faces && card.scryfall.card_faces.length > 1),
   );
 
-  let isVerified = $derived(card.verifiedCount >= card.targetCount);
+  let hasTooMany = $derived((card.verifiedCount ?? 0) > card.targetCount);
+  let isVerified = $derived((card.verifiedCount ?? 0) >= card.targetCount && !hasTooMany);
   let isPartiallyVerified = $derived(
-    card.verifiedCount > 0 && card.verifiedCount < card.targetCount,
+    (card.verifiedCount ?? 0) > 0 && (card.verifiedCount ?? 0) < card.targetCount,
   );
   let isBanned = $derived(
     card.scryfall?.legalities?.[deckStore.format] === "banned",
@@ -66,11 +67,13 @@
   onclick={handleCardClick}
   class="relative rounded-2xl overflow-hidden shadow-md group transition-all duration-200 cursor-pointer select-none border-2 active:scale-[0.98] {hasLegalityIssue
     ? 'border-error hover:shadow-xl hover:scale-[1.02]'
-    : isVerified
-      ? 'border-success/50 card-verified'
-      : isPartiallyVerified
-        ? 'border-warning'
-        : 'border-transparent card-unverified hover:shadow-xl hover:scale-[1.02]'}"
+    : hasTooMany
+      ? 'border-warning ring-2 ring-warning/60 shadow-lg shadow-warning/20 hover:shadow-xl hover:scale-[1.02]'
+      : isVerified
+        ? 'border-success/50 card-verified'
+        : isPartiallyVerified
+          ? 'border-warning'
+          : 'border-transparent card-unverified hover:shadow-xl hover:scale-[1.02]'}"
 >
   <!-- Card Image or Fallback Container -->
   <div
@@ -102,8 +105,19 @@
       </div>
     {/if}
 
-    <!-- Verified Checkmark Giant Overlay when Verified -->
-    {#if isVerified}
+    <!-- Verified Checkmark Giant Overlay when Verified, or Warning when Too Many -->
+    {#if hasTooMany}
+      <div
+        class="absolute inset-0 bg-black/25 flex items-center justify-center pointer-events-none"
+      >
+        <div
+          class="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-warning text-neutral-900 flex items-center justify-center shadow-lg border-2 border-white/60"
+          title="Too many cards of this type"
+        >
+          <span class="w-7 h-7 sm:w-8 sm:h-8">{@html warningIconSvg}</span>
+        </div>
+      </div>
+    {:else if isVerified}
       <div
         class="absolute inset-0 bg-black/40 flex items-center justify-center pointer-events-none"
       >
@@ -115,6 +129,11 @@
       </div>
     {/if}
 
+    <!-- Light yellow tint overlay when there are too many cards of that type -->
+    {#if hasTooMany}
+      <div class="absolute inset-0 bg-warning/20 pointer-events-none"></div>
+    {/if}
+
     <!-- Light red tint overlay for cards with legality issues (sits below z-10 badges) -->
     {#if hasLegalityIssue}
       <div class="absolute inset-0 bg-error/20 pointer-events-none"></div>
@@ -122,6 +141,15 @@
 
     <!-- Top Right: Banned / Not Legal / Over Limit & Game Changer Badges & Flip Button -->
     <div class="absolute top-1.5 right-1.5 sm:top-2 sm:right-2 z-10 flex flex-col items-end gap-1 sm:gap-1.5">
+      {#if hasTooMany}
+        <span
+          class="badge badge-warning badge-xs sm:badge-sm font-bold ring-1 ring-black/40 shadow-[0_1px_2px_rgba(0,0,0,0.55),0_3px_8px_rgba(0,0,0,0.35)] uppercase tracking-wider text-neutral-900"
+          title="Too many cards of this type ({card.verifiedCount} of {card.targetCount})"
+        >
+          +{card.verifiedCount - card.targetCount} Extra
+        </span>
+      {/if}
+
       {#if isBanned}
         <span
           class="badge badge-error badge-xs sm:badge-sm font-bold ring-1 ring-black/40 shadow-[0_1px_2px_rgba(0,0,0,0.55),0_3px_8px_rgba(0,0,0,0.35)] uppercase tracking-wider"
@@ -184,7 +212,7 @@
     <div
       class="absolute bottom-1.5 inset-x-1.5 sm:bottom-2 sm:inset-x-2 z-10 flex flex-col gap-1"
     >
-      {#if card.targetCount > 1}
+      {#if card.targetCount > 1 || hasTooMany}
         <!-- Multi-copy counter bar above card name -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
@@ -204,11 +232,13 @@
 
           <!-- Count Display: Verified / Target -->
           <span
-            class="font-bold text-xs px-1 text-center {isVerified
-              ? 'text-success'
-              : isPartiallyVerified
-                ? 'text-warning'
-                : 'text-white'}"
+            class="font-bold text-xs px-1 text-center {hasTooMany
+              ? 'text-warning font-extrabold'
+              : isVerified
+                ? 'text-success'
+                : isPartiallyVerified
+                  ? 'text-warning'
+                  : 'text-white'}"
           >
             {card.verifiedCount} / {card.targetCount}
           </span>

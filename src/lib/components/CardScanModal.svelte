@@ -459,10 +459,17 @@
                 </div>
 
                 {#if pendingHit.deckCard}
-                  <div class="mt-2.5 flex items-center gap-2 text-xs bg-success/10 border border-success/30 text-success rounded-lg px-2.5 py-1.5">
-                    <span class="w-3.5 h-3.5 shrink-0">{@html checkIconSvg}</span>
-                    In your deck — {pendingHit.deckCard.verifiedCount} of {pendingHit.deckCard.targetCount} found so far
-                  </div>
+                  {#if pendingHit.deckCard.verifiedCount >= pendingHit.deckCard.targetCount}
+                    <div class="mt-2.5 flex items-center gap-2 text-xs bg-warning/15 border border-warning/40 text-warning rounded-lg px-2.5 py-1.5">
+                      <span class="w-3.5 h-3.5 shrink-0 text-warning">{@html warningIconSvg}</span>
+                      In your deck — already found {pendingHit.deckCard.verifiedCount} of {pendingHit.deckCard.targetCount} (adding will exceed target)
+                    </div>
+                  {:else}
+                    <div class="mt-2.5 flex items-center gap-2 text-xs bg-success/10 border border-success/30 text-success rounded-lg px-2.5 py-1.5">
+                      <span class="w-3.5 h-3.5 shrink-0">{@html checkIconSvg}</span>
+                      In your deck — {pendingHit.deckCard.verifiedCount} of {pendingHit.deckCard.targetCount} found so far
+                    </div>
+                  {/if}
                 {:else}
                   <div class="mt-2.5 flex items-center gap-2 text-xs bg-warning/10 border border-warning/30 rounded-lg px-2.5 py-1.5">
                     <span class="w-3.5 h-3.5 shrink-0">{@html warningIconSvg}</span>

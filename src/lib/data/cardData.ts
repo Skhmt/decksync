@@ -12,6 +12,9 @@
  * degrades to pass-through so the legacy network lookup paths still work.
  */
 
+import { buildCardDatabase, normalizeCardName } from './builders';
+import { requestLoad, workersSupported } from './workerClient';
+
 export interface CardDatabase {
   /** False when card-data.json failed to load — all checks are pass-through then */
   ready: boolean;
@@ -19,26 +22,11 @@ export interface CardDatabase {
   printings: Map<string, string>;
 }
 
-interface CardDataFile {
-  names?: string[];
-  printings?: Record<string, string>;
-}
+/** Re-exported for API stability (also documented in the build scripts). */
+export { normalizeCardName };
 
 let db: CardDatabase = { ready: false, names: new Set(), printings: new Map() };
 let loadPromise: Promise<CardDatabase> | null = null;
-
-/**
- * Normalizes a card name for the database: lowercase, diacritics stripped,
- * alphanumerics only. MUST stay in sync with scripts/prepare-data.js — the
- * names array is stored pre-normalized, so lookups must apply the same form.
- */
-export function normalizeCardName(name: string): string {
-  return String(name)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
-}
 
 /** Strip leading zeros from the main number of a collector number ("0216" -> "216", "20/270" unchanged). */
 function normalizeCollectorNumber(num: string): string {
@@ -48,38 +36,45 @@ function normalizeCollectorNumber(num: string): string {
   return main.replace(/^0+(?=\d)/, '') + rest;
 }
 
+/** Main-thread fallback when Web Workers are unavailable. */
+function loadOnMainThread(): Promise<CardDatabase> {
+  return (async () => {
+    try {
+      const response = await fetch(`${import.meta.env.BASE_URL}card-data.json`, {
+        headers: { Accept: 'application/json' }
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      db = { ready: true, ...buildCardDatabase(await response.json()) };
+    } catch (err) {
+      console.warn('Failed to load local card database — falling back to live Scryfall lookups:', err);
+      // db stays { ready: false } → validation passes through, legacy paths used
+    }
+    return db;
+  })();
+}
+
 /**
- * Loads the card database (idempotent — concurrent calls share one fetch).
- * Resolves even on failure with `ready: false` so callers can proceed using
- * the legacy Scryfall lookup paths.
+ * Loads the card database (idempotent — concurrent calls share one load). The
+ * fetch + parse run in a Web Worker so the ~6 MB JSON never blocks the main
+ * thread. Resolves even on failure with `ready: false` so callers can proceed
+ * using the legacy Scryfall lookup paths.
  */
 export function ensureCardData(): Promise<CardDatabase> {
   if (!loadPromise) {
     loadPromise = (async () => {
-      try {
-        const response = await fetch(`${import.meta.env.BASE_URL}card-data.json`, {
-          headers: { Accept: 'application/json' }
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const json = (await response.json()) as CardDataFile;
-
-        const names = new Set<string>();
-        for (const name of json.names ?? []) {
-          const key = normalizeCardName(name);
-          if (key) names.add(key);
+      // Fast path: fetch + parse in a worker so the ~6 MB JSON never blocks the
+      // main thread. If the worker is unavailable or fails for any reason, fall
+      // back to loading on the main thread rather than giving up.
+      if (workersSupported()) {
+        try {
+          const built = await requestLoad<{ names: Set<string>; printings: Map<string, string> }>('card-data');
+          db = { ready: true, ...built };
+          return db;
+        } catch (err) {
+          console.warn('Worker card-data load failed — retrying on main thread:', err);
         }
-
-        const printings = new Map<string, string>();
-        for (const [key, scryfallId] of Object.entries(json.printings ?? {})) {
-          if (scryfallId) printings.set(key.toLowerCase(), scryfallId);
-        }
-
-        db = { ready: true, names, printings };
-      } catch (err) {
-        console.warn('Failed to load local card database — falling back to live Scryfall lookups:', err);
-        // db stays { ready: false } → validation passes through, legacy paths used
       }
-      return db;
+      return loadOnMainThread();
     })();
   }
   return loadPromise;

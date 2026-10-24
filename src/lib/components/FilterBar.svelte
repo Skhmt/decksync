@@ -14,8 +14,8 @@
 
   const filterOptions: { id: 'all' | 'not_found' | 'found'; label: string; shortLabel: string; count?: number }[] = $derived([
     { id: 'all', label: 'Full Deck', shortLabel: 'All', count: deckStore.totalExpectedCards },
-    { id: 'not_found', label: 'Not Found', shortLabel: 'Missing', count: deckStore.totalExpectedCards - deckStore.totalVerifiedCards },
-    { id: 'found', label: 'Found', shortLabel: 'Found', count: deckStore.totalVerifiedCards }
+    { id: 'not_found', label: 'Not Found', shortLabel: 'Missing', count: deckStore.totalMissingCards },
+    { id: 'found', label: 'Found', shortLabel: 'Found', count: deckStore.totalFoundCards }
   ]);
 </script>
 
@@ -35,7 +35,7 @@
           >
             <span class="hidden sm:inline min-w-[5rem]">{opt.label}</span>
             <span class="sm:hidden">{opt.shortLabel}</span>
-            <span class="badge badge-xs tabular-nums justify-center min-w-[1.75rem] {deckStore.filterMode === opt.id ? 'badge-primary-content text-primary' : 'badge-neutral'}">
+            <span class="badge badge-xs tabular-nums justify-center min-w-[1.75rem] {deckStore.filterMode === opt.id ? 'badge-primary-content text-primary' : (opt.id === 'found' && deckStore.totalExtraCards > 0) ? 'badge-warning text-neutral-900 font-bold' : 'badge-neutral'}">
               {opt.count ?? 0}
             </span>
           </button>

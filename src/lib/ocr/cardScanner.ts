@@ -1,4 +1,4 @@
-import { createWorker, type Worker } from 'tesseract.js';
+import type { Worker as TesseractWorker } from 'tesseract.js';
 import { extractCardName, parseSetAndCollector, type SetCodeParse } from './parse';
 
 /**
@@ -10,24 +10,34 @@ import { extractCardName, parseSetAndCollector, type SetCodeParse } from './pars
 
 const TESS_DIR = `${import.meta.env.BASE_URL}tess/`;
 
-let workerPromise: Promise<Worker> | null = null;
+let workerPromise: Promise<TesseractWorker> | null = null;
 
 /** Lazily creates (and caches) the shared tesseract worker. OEM 1 = LSTM only. */
-export function initScanner(): Promise<Worker> {
+export function initScanner(): Promise<TesseractWorker> {
   if (!workerPromise) {
-    workerPromise = createWorker('eng', 1, {
-      workerPath: `${TESS_DIR}worker.min.js`,
-      corePath: TESS_DIR,
-      langPath: TESS_DIR
-    }).then(async (worker) => {
-      // Printed card text is best segmented at ~300 DPI (camera photos carry no DPI metadata)
-      await worker.setParameters({ user_defined_dpi: '300' });
-      return worker;
-    }).catch((err) => {
-      // Reset so the next attempt can retry (e.g. transient load failure)
-      workerPromise = null;
-      throw err;
-    });
+    // Import tesseract.js on first use instead of at module load. It is a heavy
+    // wasm dependency; an eager top-level import would put it in the initial
+    // page-load graph so Vite pre-bundles it during dev's first request (~90 s).
+    // Deferring the import keeps first paint instant — tesseract only loads when
+    // a scan actually starts.
+    workerPromise = import('tesseract.js')
+      .then(({ createWorker }) =>
+        createWorker('eng', 1, {
+          workerPath: `${TESS_DIR}worker.min.js`,
+          corePath: TESS_DIR,
+          langPath: TESS_DIR
+        })
+      )
+      .then(async (worker) => {
+        // Printed card text is best segmented at ~300 DPI (camera photos carry no DPI metadata)
+        await worker.setParameters({ user_defined_dpi: '300' });
+        return worker;
+      })
+      .catch((err) => {
+        // Reset so the next attempt can retry (e.g. transient load failure)
+        workerPromise = null;
+        throw err;
+      });
   }
   return workerPromise;
 }

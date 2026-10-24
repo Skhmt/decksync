@@ -83,11 +83,13 @@
       </h2>
       <ul class="space-y-0.5 max-h-[70vh] overflow-y-auto">
         {#each deckStore.displayedGroups as group, i}
-          {@const target = group.cards.reduce((sum, c) => sum + c.targetCount, 0)}
+          {@const target = group.cards.reduce((sum, c) => sum + (c.targetCount ?? 0), 0)}
+          {@const found = group.cards.reduce((sum, c) => sum + (c.verifiedCount ?? 0), 0)}
           {@const verified = group.cards.reduce(
-            (sum, c) => sum + Math.min(c.verifiedCount, c.targetCount),
+            (sum, c) => sum + Math.min(c.verifiedCount ?? 0, c.targetCount ?? 0),
             0,
           )}
+          {@const hasExtra = group.cards.some(c => (c.verifiedCount ?? 0) > (c.targetCount ?? 0))}
           {@const isDone = target > 0 && verified >= target}
           {@const isPartial = !isDone && verified > 0}
           <li>
@@ -96,7 +98,7 @@
               class="w-full text-left px-2 py-1.5 rounded-lg transition-colors {activeIndex === i
                 ? 'bg-primary/15'
                 : 'hover:bg-base-300/70'}"
-              title={`Jump to ${group.title} (${verified}/${target} verified)`}
+              title={`Jump to ${group.title} (${found}/${target} found)`}
             >
               <span class="flex items-center justify-between gap-2">
                 <span
@@ -105,23 +107,27 @@
                   {group.title}
                 </span>
                 <span
-                  class="text-[10px] font-mono shrink-0 {isDone
-                    ? 'text-success'
-                    : isPartial
-                      ? 'text-warning'
-                      : 'text-base-content/50'}"
+                  class="text-[10px] font-mono shrink-0 {hasExtra
+                    ? 'text-warning font-bold'
+                    : isDone
+                      ? 'text-success'
+                      : isPartial
+                        ? 'text-warning'
+                        : 'text-base-content/50'}"
                 >
-                  {verified}/{target}
+                  {found}/{target}
                 </span>
               </span>
               <span class="block h-1 mt-1 rounded-full bg-base-300 overflow-hidden">
                 <span
-                  class="block h-full rounded-full transition-all duration-300 {isDone
-                    ? 'bg-success'
-                    : isPartial
-                      ? 'bg-warning'
-                    : 'bg-primary'}"
-                  style="width: {target > 0 ? Math.min(100, (verified / target) * 100) : 0}%"
+                  class="block h-full rounded-full transition-all duration-300 {hasExtra
+                    ? 'bg-warning'
+                    : isDone
+                      ? 'bg-success'
+                      : isPartial
+                        ? 'bg-warning'
+                        : 'bg-primary'}"
+                  style="width: {target > 0 ? Math.min(100, (found / target) * 100) : 0}%"
                 ></span>
               </span>
             </button>

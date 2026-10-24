@@ -1,7 +1,7 @@
 <script lang="ts">
   import { deckStore } from "../state/deck.svelte";
   import type { DeckCardItem } from "../types";
-  import { boltIconSvg, cameraIconSvg, checkIconSvg, questionCircleIconSvg } from "../icons";
+  import { boltIconSvg, cameraIconSvg, checkIconSvg, questionCircleIconSvg, warningIconSvg } from "../icons";
 
   function handleRowClick(card: DeckCardItem) {
     deckStore.toggleCard(card.id);
@@ -76,7 +76,8 @@
             class="bg-base-100 rounded-xl border border-base-300 overflow-hidden divide-y divide-base-200 shadow-xs"
           >
             {#each group.cards as card (card.id)}
-              {@const isVerified = card.verifiedCount >= card.targetCount}
+              {@const hasTooMany = card.verifiedCount > card.targetCount}
+              {@const isVerified = card.verifiedCount >= card.targetCount && !hasTooMany}
               {@const isPartiallyVerified =
                 card.verifiedCount > 0 && card.verifiedCount < card.targetCount}
               {@const isBanned =
@@ -97,28 +98,36 @@
                 onclick={() => handleRowClick(card)}
                 class="flex items-center justify-between px-2.5 sm:px-3 py-2 sm:py-2.5 min-h-[48px] transition-colors cursor-pointer select-none active:bg-base-300/40 {hasLegalityIssue
                   ? 'bg-error/10 border-l-4 border-error'
-                  : isVerified
-                    ? 'bg-base-200/40 opacity-50 grayscale'
-                    : isPartiallyVerified
-                      ? 'bg-warning/5 hover:bg-warning/10'
-                      : 'hover:bg-base-200/70'}"
+                  : hasTooMany
+                    ? 'bg-warning/15 border-l-4 border-warning hover:bg-warning/20'
+                    : isVerified
+                      ? 'bg-base-200/40 opacity-50 grayscale'
+                      : isPartiallyVerified
+                        ? 'bg-warning/5 hover:bg-warning/10'
+                        : 'hover:bg-base-200/70'}"
               >
                 <!-- Left: Checkbox & Name & Badges -->
                 <div class="flex items-center gap-2.5 sm:gap-3 min-w-0 pr-2">
                   <!-- Checkbox -->
                   <button
                     onclick={(e) => handleCheckboxClick(e, card)}
-                    class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border transition-all active:scale-90 {isVerified
-                      ? 'bg-success text-success-content border-success'
-                      : isPartiallyVerified
-                        ? 'bg-warning text-warning-content border-warning'
-                        : 'border-base-content/30 hover:border-base-content'}"
-                    title={isVerified
-                      ? "Un-verify card (set to 0)"
-                      : "Verify card"}
+                    class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border transition-all active:scale-90 {hasTooMany
+                      ? 'bg-warning text-neutral-900 border-warning'
+                      : isVerified
+                        ? 'bg-success text-success-content border-success'
+                        : isPartiallyVerified
+                          ? 'bg-warning text-warning-content border-warning'
+                          : 'border-base-content/30 hover:border-base-content'}"
+                    title={hasTooMany
+                      ? `Too many cards (${card.verifiedCount}/${card.targetCount}) - click to clear`
+                      : isVerified
+                        ? "Un-verify card (set to 0)"
+                        : "Verify card"}
                     aria-label="Verify checkbox"
                   >
-                    {#if isVerified}
+                    {#if hasTooMany}
+                      <span class="w-4 h-4">{@html warningIconSvg}</span>
+                    {:else if isVerified}
                       <span class="w-4 h-4">{@html checkIconSvg}</span>
                     {:else if isPartiallyVerified}
                       <span class="text-[10px] font-bold"
@@ -137,6 +146,14 @@
                       >
                         {card.name}
                       </span>
+                      {#if hasTooMany}
+                        <span
+                          class="badge badge-warning badge-xs font-bold ring-1 ring-black/40 shadow-[0_1px_2px_rgba(0,0,0,0.55),0_3px_8px_rgba(0,0,0,0.35)] uppercase text-neutral-900"
+                          title={`Too many copies (${card.verifiedCount} of ${card.targetCount})`}
+                        >
+                          +{card.verifiedCount - card.targetCount} Extra
+                        </span>
+                      {/if}
                       {#if isBanned}
                         <span
                           class="badge badge-error badge-xs font-bold ring-1 ring-black/40 shadow-[0_1px_2px_rgba(0,0,0,0.55),0_3px_8px_rgba(0,0,0,0.35)] uppercase"
@@ -190,7 +207,7 @@
 
                 <!-- Right: Counter controls -->
                 <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                  {#if card.targetCount > 1}
+                  {#if card.targetCount > 1 || hasTooMany}
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div
                       class="flex items-center gap-0.5 sm:gap-1 bg-base-200 rounded-lg p-0.5 border border-base-300"
@@ -206,11 +223,13 @@
                         -
                       </button>
                       <span
-                        class="font-bold text-xs px-1 sm:px-1.5 min-w-[2rem] sm:min-w-[2.5rem] text-center {isVerified
-                          ? 'text-success'
-                          : isPartiallyVerified
-                            ? 'text-warning'
-                            : 'text-base-content'}"
+                        class="font-bold text-xs px-1 sm:px-1.5 min-w-[2rem] sm:min-w-[2.5rem] text-center {hasTooMany
+                          ? 'text-warning font-extrabold'
+                          : isVerified
+                            ? 'text-success'
+                            : isPartiallyVerified
+                              ? 'text-warning'
+                              : 'text-base-content'}"
                       >
                         {card.verifiedCount}/{card.targetCount}
                       </span>
