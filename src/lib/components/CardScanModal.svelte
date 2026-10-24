@@ -4,9 +4,9 @@
   import { isCardDataReady } from '../data/cardData';
   import { ensureCardHashes } from '../data/cardHashes';
   import {
-    CARD_ZONE,
     NAME_REGION,
     SET_REGION,
+    cardZoneForFrame,
     captureFrame,
     initScanner,
     recognizeNameRegion,
@@ -68,12 +68,16 @@
   let lastHitAt = 0;
   let missesSinceHit = 0;
 
-  // Map card-zone-relative region fractions onto full-frame fractions, so the
-  // framing guide overlays line up exactly with what the OCR crops.
-  const zoneX = (r: number) => CARD_ZONE.x0 + r * (CARD_ZONE.x1 - CARD_ZONE.x0);
-  const zoneY = (r: number) => CARD_ZONE.y0 + r * (CARD_ZONE.y1 - CARD_ZONE.y0);
-  const zoneW = (r: number) => r * (CARD_ZONE.x1 - CARD_ZONE.x0);
-  const zoneH = (r: number) => r * (CARD_ZONE.y1 - CARD_ZONE.y0);
+  // The on-screen card zone — always a true MTG-card (5:7) rectangle, recomputed
+  // from the camera aspect so the dashed guide is exactly card-shaped. It mirrors
+  // cardZoneForFrame() in cardScanner.ts (which the OCR crops use), so the overlays
+  // line up exactly with what the scanner reads.
+  const cardZone = $derived(cardZoneForFrame(videoAspect));
+  // Map card-zone-relative region fractions onto full-frame fractions for the guide.
+  const zoneX = (r: number) => cardZone.x0 + r * (cardZone.x1 - cardZone.x0);
+  const zoneY = (r: number) => cardZone.y0 + r * (cardZone.y1 - cardZone.y0);
+  const zoneW = (r: number) => r * (cardZone.x1 - cardZone.x0);
+  const zoneH = (r: number) => r * (cardZone.y1 - cardZone.y0);
 
   // --- Camera lifecycle -------------------------------------------------
 
@@ -420,7 +424,7 @@
             <div class="absolute inset-0 pointer-events-none">
               <div
                 class="absolute rounded-lg border-2 border-dashed border-white/40"
-                style="left: {CARD_ZONE.x0 * 100}%; top: {CARD_ZONE.y0 * 100}%; width: {(CARD_ZONE.x1 - CARD_ZONE.x0) * 100}%; height: {(CARD_ZONE.y1 - CARD_ZONE.y0) * 100}%;"
+                style="left: {cardZone.x0 * 100}%; top: {cardZone.y0 * 100}%; width: {(cardZone.x1 - cardZone.x0) * 100}%; height: {(cardZone.y1 - cardZone.y0) * 100}%;"
               ></div>
               <div
                 class="absolute rounded-md border border-primary/70 bg-primary/10"

@@ -50,16 +50,42 @@ export interface FrameRect {
   y1: number;
 }
 
+/** Width / height of a physical MTG card (2.5" x 3.5") — the guide's aspect ratio. */
+export const CARD_ASPECT = 2.5 / 3.5;
+
 /**
- * The central area of the camera frame where the user lines up the card (the
- * dashed guide in the scanner). Keeping it smaller than the full frame lets the
- * card sit farther from the phone. All OCR regions below are expressed as
- * fractions of this zone, not of the full frame.
+ * The on-screen "card zone": where the user lines up a physical card. It is
+ * always a true MTG-card rectangle (CARD_ASPECT), centered in the camera frame
+ * and scaled to fill as much of the frame as possible while leaving a small
+ * margin. Matching a real card's shape means the dashed guide is exactly
+ * card-shaped, and the OCR regions below (fractions of this zone) line up with
+ * the card's name bar and set-code corner for any camera aspect ratio.
+ */
+export function cardZoneForFrame(frameAspect: number): FrameRect {
+  const margin = 0.05; // fraction of each frame dimension kept free around the card
+  const availW = 1 - 2 * margin;
+  const availH = 1 - 2 * margin;
+  // Fit a CARD_ASPECT (width/height) rectangle in *pixel* terms inside the
+  // available area. Fractions are of the frame's width/height, so they relate
+  // through the frame aspect: fw·frameW / (fh·frameH) = CARD_ASPECT
+  //   =>  fw = (CARD_ASPECT / frameAspect) · fh.
+  const fh = Math.min(availH, (availW * frameAspect) / CARD_ASPECT);
+  const fw = (CARD_ASPECT / frameAspect) * fh;
+  return { x0: (1 - fw) / 2, y0: (1 - fh) / 2, x1: (1 + fw) / 2, y1: (1 + fh) / 2 };
+}
+
+/**
+ * Fixed crop rectangle used by the pHash channel only (see hashScanner.ts). It
+ * matches the geometry scripts/prepare-hashes.js used to build
+ * public/card-hashes.bin, so the existing index still loads and matches without
+ * being regenerated. The OCR regions and the framing guide instead use
+ * cardZoneForFrame() — a true 5:7 card rectangle; regenerating the hash index
+ * against that zone would align the two channels fully.
  */
 export const CARD_ZONE: FrameRect = { x0: 0.18, y0: 0.10, x1: 0.82, y1: 0.90 };
 
 /**
- * Card layout regions as fractions of the card zone (see CARD_ZONE). The
+ * Card layout regions as fractions of the card zone (cardZoneForFrame()). The
  * scanner crops these areas; CameraScanModal's framing guide mirrors them so
  * the user knows where to line the card up.
  */
@@ -87,14 +113,18 @@ export function captureFrame(video: HTMLVideoElement): HTMLCanvasElement {
 /**
  * Crops a region out of a full frame and prepares it for OCR:
  * upscaled to the target height, grayscale, contrast-stretched.
- * The region is expressed relative to CARD_ZONE, so it is mapped onto the
+ * The region is expressed relative to cardZoneForFrame(), so it is mapped onto
  * full frame first.
  */
 function preprocessRegion(frame: HTMLCanvasElement, region: RegionSpec): HTMLCanvasElement {
-  const fx0 = CARD_ZONE.x0 + region.x0 * (CARD_ZONE.x1 - CARD_ZONE.x0);
-  const fy0 = CARD_ZONE.y0 + region.y0 * (CARD_ZONE.y1 - CARD_ZONE.y0);
-  const fx1 = CARD_ZONE.x0 + region.x1 * (CARD_ZONE.x1 - CARD_ZONE.x0);
-  const fy1 = CARD_ZONE.y0 + region.y1 * (CARD_ZONE.y1 - CARD_ZONE.y0);
+  // Follow the on-screen card zone — a true 5:7 card rectangle for this frame's
+  // aspect (see cardZoneForFrame) — so the crop matches where the user lines the
+  // card up against the dashed guide.
+  const zone = cardZoneForFrame(frame.width / frame.height);
+  const fx0 = zone.x0 + region.x0 * (zone.x1 - zone.x0);
+  const fy0 = zone.y0 + region.y0 * (zone.y1 - zone.y0);
+  const fx1 = zone.x0 + region.x1 * (zone.x1 - zone.x0);
+  const fy1 = zone.y0 + region.y1 * (zone.y1 - zone.y0);
 
   const sx = frame.width * fx0;
   const sy = frame.height * fy0;
