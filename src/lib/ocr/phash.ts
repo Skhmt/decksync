@@ -73,7 +73,7 @@ export function hashAspectClassKey(frameAspect: number): string {
  * stored arrays: fill outer, angle inner.
  */
 export const HASH_STORE_ANGLES = [-8, -4, 0, 4, 8];
-export const HASH_STORE_FILLS = [1.0, 0.85];
+export const HASH_STORE_FILLS = [1.15, 1.0, 0.85, 0.70];
 
 /**
  * Max Hamming distance (of 64 bits) for a hash to count as a match.
