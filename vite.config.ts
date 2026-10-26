@@ -38,7 +38,7 @@ export default defineConfig({
         // has to grow with those files, so Workbox's per-file size cap stops
         // being a constraint even as the OCR assets get bigger.
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        globIgnores: ['tess/**', 'card-data.json', 'card-hashes.bin'],
+        globIgnores: ['tess/**', 'opencv/**', 'card-data.json', 'card-hashes.bin'],
         // The largest precached file is now an app bundle (not a Tesseract asset),
         // so the default 2 MiB cap would usually suffice; this headroom only
         // guards against an unusually large chunk being silently dropped.
@@ -55,6 +55,18 @@ export default defineConfig({
             options: {
               cacheName: 'tess-assets',
               expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] }
+            }
+          },
+          // OpenCV.js (card localization + perspective warp). Loaded lazily at scan
+          // time by src/lib/ocr/cardWarp.ts; cache-first so it works offline after
+          // the first scan. A single self-contained file, like the Tesseract cores.
+          {
+            urlPattern: /\/opencv\/.+$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'opencv-assets',
+              expiration: { maxEntries: 8, maxAgeSeconds: 60 * 60 * 24 * 365 },
               cacheableResponse: { statuses: [0, 200] }
             }
           },

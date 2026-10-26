@@ -13,6 +13,7 @@
     recognizeSetRegion
   } from '../ocr/cardScanner';
   import { identifyByHash } from '../ocr/hashScanner';
+  import { warpCardToCanonical, initOpenCv } from '../ocr/cardWarp';
   import type { DeckCardItem, ScryfallCard } from '../types';
   import { cameraIconSvg, checkIconSvg, warningIconSvg, xmarkIconSvg } from '../icons';
 
@@ -97,8 +98,9 @@
     pendingHit = null;
     openCamera();
 
-    // Warm up the OCR engine in the background so the first scan is snappy
+    // Warm up the OCR engine + OpenCV in the background so the first scan is snappy
     void initScanner().catch(err => console.warn('OCR engine failed to initialize:', err));
+    void initOpenCv().catch(err => console.warn('OpenCV failed to initialize:', err));
     void ensureCardHashes(); // warm the pHash index so the first scan can use it
 
     return () => {
@@ -167,11 +169,21 @@
         if (i < BURST_FRAMES - 1) await nextFrame();
       }
 
+      // Localize + perspective-warp each frame to a canonical upright 5:7 card.
+      // Both channels prefer the warped frames when OpenCV found the card in a
+      // consensus of them; otherwise they fall back to the raw frames so the
+      // existing manual-align path keeps working unchanged.
+      const minVotes = Math.ceil(BURST_FRAMES / 2);
+      const warped = await warpFrames(frames);
+      const scanFrames = warped.length >= minVotes ? warped : frames;
+
       // Fastest channel first — pHash against the local index (offline, ~ms).
       // Require consensus: the same card must win at least half the burst frames,
       // so a single noisy/blank frame can't force an acceptance. Only when it
       // finds nothing do we spend tesseract time on OCR.
-      const hashResult = await hashChannel(frames, token, Math.ceil(BURST_FRAMES / 2));
+      const hashResult = scanFrames.length >= 2
+        ? await hashChannel(scanFrames, token, minVotes)
+        : { card: null };
       if (token !== scanToken) return;
       if (hashResult.card) {
         handleContinuousHit(hashResult.card, 'hash');
@@ -179,7 +191,7 @@
       }
 
       // Fast path — bottom-left corner only (small crop, fast)
-      const setRead = await recognizeSetRegion(frames[0]);
+      const setRead = await recognizeSetRegion(scanFrames[0]);
       if (token !== scanToken) return;
 
       let card: ScryfallCard | null = null;
@@ -204,7 +216,7 @@
       // read that didn't resolve to a printing). Set info is passed along so the
       // lookup can still do an in-set search.
       if (!card) {
-        const nameRead = await recognizeNameRegion(frames[0]);
+        const nameRead = await recognizeNameRegion(scanFrames[0]);
         if (token !== scanToken) return;
         card = await identifyScannedCard({
           name: nameRead.name,
@@ -404,6 +416,16 @@
     card: ScryfallCard | null;
   }
 
+  /** Warps each frame to a canonical card; returns only the frames where OpenCV found one. */
+  async function warpFrames(frames: HTMLCanvasElement[]): Promise<HTMLCanvasElement[]> {
+    const out: HTMLCanvasElement[] = [];
+    for (const f of frames) {
+      const w = await warpCardToCanonical(f);
+      if (w) out.push(w);
+    }
+    return out;
+  }
+
   /**
    * Hash channel — pHash of the art region matched against the local index.
    * Offline and fast (typically well under 100 ms); resolves a null card when
@@ -414,7 +436,7 @@
    */
   async function hashChannel(frames: HTMLCanvasElement[], token: number, minVotes = 1): Promise<ChannelResult> {
     try {
-      const match = await identifyByHash(frames, videoAspect);
+      const match = await identifyByHash(frames, frames[0].width / frames[0].height);
       if (!match || match.votes < minVotes) return { card: null };
       const card = await lookupCardById(match.entry.id);
       if (token !== scanToken) return { card: null };
