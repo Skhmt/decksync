@@ -90,6 +90,9 @@ const MAX_SEARCH_PAGES = 8;
 /** Only these layouts produce scannable single faces (multi-faced layouts are
  *  indexed face-by-face via `card_faces`). */
 const ALLOWED_LAYOUTS = new Set(['normal', 'double_faced_card', 'full_art', 'modal_dfc', 'adventure']);
+/** Faces hashed concurrently per name — overlaps image fetch + sharp/libvips work
+ *  across cores while the Scryfall search above stays paced at 1 req/s. */
+const FACE_CONCURRENCY = Math.max(1, Number(process.env.DECKSYNC_HASH_FACE_CONCURRENCY ?? 8));
 
 /**
  * Initial test list — deliberately small (no full MTG fetch yet). Covers the
@@ -263,6 +266,24 @@ function cropFraction(rgba, width, height, rect) {
   return { data: out, width: cw, height: ch };
 }
 
+/** Runs an async mapper over items with at most `limit` in flight; results keep input order. */
+async function mapBounded(items, limit, mapper) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workers }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        out[i] = { ok: true, value: await mapper(items[i], i) };
+      } catch (err) {
+        out[i] = { ok: false, error: err };
+      }
+    }
+  }));
+  return out;
+}
+
 /**
  * Renders the official face into a synthetic 5:7 card zone and returns the pHash
  * of HASH_ART_REGION for every stored variant (fill × angle). The card is
@@ -353,6 +374,9 @@ async function processName(name, ctx) {
   let added = 0;
   let skipped = 0;
   let failed = 0;
+
+  // Collect the faces still to do (skip ones already hashed in an earlier run).
+  const jobs = [];
   for (const card of english) {
     for (const face of faceImagesFor(card)) {
       const faceKey = `${card.id}|${face.face}`;
@@ -360,23 +384,41 @@ async function processName(name, ctx) {
         skipped++; // already hashed in an earlier (possibly interrupted) run
         continue;
       }
-      try {
-        const bytes = await getFaceImage(card.id, face.face, face.url);
-        const hashes = await buildFaceHashes(bytes);
-        if (isDuplicateOf(hashes, acceptedHashes)) {
-          appendLine(PROGRESS_FILE, { id: card.id, face: face.face, name, status: 'dropped' });
-        } else {
-          acceptedHashes.push(hashes);
-          // Durable the moment the image is hashed — no work lost on cancel.
-          appendBinRecord(OUT_FILE, { id: card.id, name, face: face.face, hashes });
-          appendLine(PROGRESS_FILE, { id: card.id, face: face.face, name, status: 'accepted' });
-          added++;
-        }
-        ctx.processedKeys.add(faceKey);
-      } catch (err) {
-        failed++;
-        console.warn(`[prepare-hashes]     ${card.id} face ${face.face}: ${err.message}`);
+      jobs.push({ card, face, faceKey });
+    }
+  }
+
+  // Download + hash the faces concurrently (bounded to FACE_CONCURRENCY) so
+  // sharp/libvips work runs across cores while images fetch — the Scryfall
+  // search above stays paced at 1 req/s; only the image CDN + hashing overlap.
+  const results = await mapBounded(jobs, FACE_CONCURRENCY, async ({ card, face }) => {
+    const bytes = await getFaceImage(card.id, face.face, face.url);
+    return { hashes: await buildFaceHashes(bytes) };
+  });
+
+  // Dedup + persist sequentially in original order (deterministic and resume-safe).
+  for (let i = 0; i < jobs.length; i++) {
+    const { card, face, faceKey } = jobs[i];
+    if (!results[i].ok) {
+      failed++;
+      console.warn(`[prepare-hashes]     ${card.id} face ${face.face}: ${results[i].error.message}`);
+      continue; // not marked processed — retried on the next run
+    }
+    try {
+      const hashes = results[i].value.hashes;
+      if (isDuplicateOf(hashes, acceptedHashes)) {
+        appendLine(PROGRESS_FILE, { id: card.id, face: face.face, name, status: 'dropped' });
+      } else {
+        acceptedHashes.push(hashes);
+        // Durable the moment the image is hashed — no work lost on cancel.
+        appendBinRecord(OUT_FILE, { id: card.id, name, face: face.face, hashes });
+        appendLine(PROGRESS_FILE, { id: card.id, face: face.face, name, status: 'accepted' });
+        added++;
       }
+      ctx.processedKeys.add(faceKey);
+    } catch (err) {
+      failed++;
+      console.warn(`[prepare-hashes]     ${card.id} face ${face.face}: ${err.message}`);
     }
   }
   if (failed === 0) appendLine(DONE_NAMES_FILE, { type: 'done', name });

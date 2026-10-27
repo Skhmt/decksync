@@ -11,9 +11,11 @@
  * 8×8 frequencies (excluding DC) → threshold each against their median →
  * 64-bit hash stored as a 16-char hex string. Similar images differ by only a
  * few Hamming bits, so matching tolerates small rotation, rescale, JPEG
- * artifacts and lighting shifts. Tilted cards are handled by storing
- * pre-rotated hash variants at build time (see HASH_STORE_ANGLES /
- * HASH_STORE_FILLS), so the app only ever hashes a single unrotated crop.
+ * artifacts and lighting shifts. Tilt is removed on-device before hashing by
+ * the perspective warp (src/lib/ocr/cardWarp.ts), which re-renders each frame
+ * as an upright card — so the index only stores the unrotated variant
+ * (HASH_STORE_ANGLES = [0]); HASH_STORE_FILLS still covers cards held slightly
+ * smaller than the guide. The app hashes a single crop per frame.
  */
 
 export interface PixelBuffer {
@@ -66,13 +68,14 @@ export function hashAspectClassKey(frameAspect: number): string {
 }
 
 /**
- * Pre-build variant grid: stored hashes are rendered with the card rotated by
- * each angle (tilt tolerance — a tilted photo matches its own angle variant at
- * near-perfect distance) and scaled to each fill of the zone height (the user
- * may hold the card slightly smaller than the guide). Variant order in the
- * stored arrays: fill outer, angle inner.
+ * Pre-build variant grid. Tilt no longer needs stored variants — the on-device
+ * perspective warp (src/lib/ocr/cardWarp.ts) re-renders each frame as an upright
+ * card before hashing, so only the unrotated variant is kept (HASH_STORE_ANGLES
+ * = [0]). Fills still cover the manual-align fallback, where the user may hold
+ * the card slightly smaller than the guide. Variant order in the stored arrays:
+ * fill outer, angle inner.
  */
-export const HASH_STORE_ANGLES = [-8, -4, 0, 4, 8];
+export const HASH_STORE_ANGLES = [0];
 export const HASH_STORE_FILLS = [1.15, 1.0, 0.85, 0.70];
 
 /**
@@ -81,9 +84,9 @@ export const HASH_STORE_FILLS = [1.15, 1.0, 0.85, 0.70];
  * Kept tight on purpose: the index holds ~230k hashes per aspect class, so at a
  * loose threshold non-card crops (blank table, hand, empty frame) land within
  * range of some stored face by pure chance and produce false positives. Real
- * cards match their own pre-rotated/pre-scaled variant at near-zero distance,
- * so 8 trades almost no recall for a large drop in accidental matches. Must
- * stay >= HASH_DEDUP_DISTANCE below or a card's own variants could be split
+ * cards match their own pre-scaled variant at near-zero distance, so 8 trades
+ * almost no recall for a large drop in accidental matches. Must stay >=
+ * HASH_DEDUP_DISTANCE below or a card's own variants could be split
  * across families at build time.
  */
 export const HASH_MATCH_THRESHOLD = 8;

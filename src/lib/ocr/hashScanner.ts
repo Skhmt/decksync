@@ -4,10 +4,11 @@
  * hashes it once with computePHashFromRGBA and matches against the local
  * index — typically well under 100 ms per frame, no network involved.
  *
- * Tilt and size tolerance come from the stored variants (pre-rotated /
- * pre-scaled renders in the index), so the app side only ever hashes a single
- * unrotated crop. Multiple frames vote; the card with the most votes wins
- * (ties break on lowest average distance).
+ * Tilt tolerance comes from the on-device perspective warp (cardWarp.ts), which
+ * re-renders each frame upright before hashing; size tolerance comes from the
+ * stored fill variants. The app side only ever hashes a single crop per frame.
+ * Multiple frames vote; the card with the most votes wins (ties break on lowest
+ * average distance).
  */
 
 import { ensureCardHashes, type CardHashEntry, type PackedClass } from '../data/cardHashes';
