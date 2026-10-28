@@ -11,11 +11,13 @@
  * 8×8 frequencies (excluding DC) → threshold each against their median →
  * 64-bit hash stored as a 16-char hex string. Similar images differ by only a
  * few Hamming bits, so matching tolerates small rotation, rescale, JPEG
- * artifacts and lighting shifts. Tilt is removed on-device before hashing by
- * the perspective warp (src/lib/ocr/cardWarp.ts), which re-renders each frame
- * as an upright card — so the index only stores the unrotated variant
- * (HASH_STORE_ANGLES = [0]); HASH_STORE_FILLS still covers cards held slightly
- * smaller than the guide. The app hashes a single crop per frame.
+ * artifacts and lighting shifts. Tilt is mostly removed on-device by the
+ * perspective warp (src/lib/ocr/cardWarp.ts), which re-renders each frame as an
+ * upright card; but the warp falls back to raw (tilted) frames when OpenCV can't
+ * lock the card quad — common for old-frame cards. So the index stores a small
+ * set of rotation variants (HASH_STORE_ANGLES) to absorb that residual tilt, and
+ * HASH_STORE_FILLS still covers cards held slightly smaller than the guide. The
+ * app hashes a single crop per frame.
  */
 
 export interface PixelBuffer {
@@ -68,14 +70,14 @@ export function hashAspectClassKey(frameAspect: number): string {
 }
 
 /**
- * Pre-build variant grid. Tilt no longer needs stored variants — the on-device
- * perspective warp (src/lib/ocr/cardWarp.ts) re-renders each frame as an upright
- * card before hashing, so only the unrotated variant is kept (HASH_STORE_ANGLES
- * = [0]). Fills still cover the manual-align fallback, where the user may hold
- * the card slightly smaller than the guide. Variant order in the stored arrays:
- * fill outer, angle inner.
+ * Pre-build variant grid. The on-device perspective warp (src/lib/ocr/cardWarp.ts)
+ * uprights most frames, but it falls back to raw (tilted) frames when OpenCV can't
+ * lock the card quad — which happens more often for old-frame cards. HASH_STORE_ANGLES
+ * therefore keeps a small rotation set so those tilted crops still match; fills cover
+ * the manual-align fallback where the user holds the card slightly smaller than the
+ * guide. Variant order in the stored arrays: fill outer, angle inner.
  */
-export const HASH_STORE_ANGLES = [0];
+export const HASH_STORE_ANGLES = [-4, 0, 4];
 export const HASH_STORE_FILLS = [1.15, 1.0, 0.85, 0.70];
 
 /**

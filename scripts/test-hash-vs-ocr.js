@@ -18,8 +18,9 @@
  *
  * Usage:
  *   npm run prepare:hashes            # build the index first
- *   node scripts/test-hash-vs-ocr.js                     # all indexed cards
- *   DECKSYNC_BENCH_CARDS="Black Lotus" node scripts/test-hash-vs-ocr.js
+ *   node scripts/test-hash-vs-ocr.js                     # representative subset (default)
+ *   DECKSYNC_BENCH_SAMPLE=20 ...             # size of that default subset (default 12)
+ *   DECKSYNC_BENCH_CARDS="Black Lotus" ...    # restrict to specific cards instead
  *   DECKSYNC_BENCH_OCR=0 ...           # skip the (slow) tesseract part
  */
 
@@ -52,12 +53,18 @@ const BG = { r: 90, g: 85, b: 75 };
 
 /** Fit a centered 5:7 (CARD_ASPECT) box in pixel terms inside the frame — mirrors cardZoneForFrame(). */
 function cardBox(frameW, frameH, margin = 0.05) {
-  const availW = frameW * (1 - 2 * margin);
-  const availH = frameH * (1 - 2 * margin);
+  // Mirror cardZoneForFrame(): fit the CARD_ASPECT rectangle in *fraction* space
+  // (fw/fh are fractions of frame width/height), then scale to pixels. Computing
+  // fw from a pixel-valued fh is wrong — the relation fw=(CARD_ASPECT/aspect)*fh
+  // only holds when both sides are fractions, which produced an over-narrow zone.
+  const availW = 1 - 2 * margin;
+  const availH = 1 - 2 * margin;
   const aspect = frameW / frameH;
-  const fh = Math.min(availH, (availW * aspect) / CARD_ASPECT);
-  const fw = (CARD_ASPECT / aspect) * fh;
-  return { x: Math.round((frameW - fw) / 2), y: Math.round((frameH - fh) / 2), w: Math.round(fw), h: Math.round(fh) };
+  const fh = Math.min(availH, (availW * aspect) / CARD_ASPECT); // fraction of height
+  const fw = (CARD_ASPECT / aspect) * fh;                        // fraction of width
+  const w = fw * frameW;
+  const h = fh * frameH;
+  return { x: Math.round((frameW - w) / 2), y: Math.round((frameH - h) / 2), w: Math.round(w), h: Math.round(h) };
 }
 
 // Benchmark matrix (kept small on purpose — each photo costs a sharp render)
@@ -66,6 +73,33 @@ const FILLS = [1.0, 0.9];
 const JPEG_Q = 85;
 /** Max entries per card name exercised (first / middle / last artwork). */
 const MAX_ENTRIES_PER_CARD = 3;
+
+// --- Representative subset -----------------------------------------------------
+// FNV-1a 32-bit — a cheap, stable string hash so the default subset is identical on
+// every run (reproducible benchmark) without needing a seeded RNG.
+function fnv1a32(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/**
+ * Pick a small, deterministic, representative set of entries to simulate when no
+ * explicit card filter is given: one entry (primary printing) per distinct name, so
+ * the render cost stays bounded by `count` no matter how many printings a name has.
+ * Names are ranked by stable hash and the lowest `count` taken — a reproducible
+ * uniform cross-section of the catalog. Simulated photos still match against the FULL index.
+ */
+function selectRepresentativeEntries(index, count) {
+  const byName = new Map(); // first (primary) entry per distinct name
+  for (const e of index.entries) if (!byName.has(e.name)) byName.set(e.name, e);
+
+  const ranked = [...byName.keys()].map(n => ({ n, h: fnv1a32(n) })).sort((a, b) => a.h - b.h);
+  return ranked.slice(0, count).map(r => byName.get(r.n));
+}
 
 // --- Simulated photos --------------------------------------------------------
 
@@ -106,8 +140,16 @@ async function simulatePhoto(faceBytes, cls, tilt, fill) {
   const H = Math.max(8, Math.round(box.h * fill));
   const W = Math.max(8, Math.round(H * meta.width / meta.height));
   const resized = await sharp(faceBytes).resize(W, H).jpeg({ quality: JPEG_Q }).toBuffer();
-  const rot = tilt === 0 ? resized : await sharp(resized).rotate(tilt, { background: BG }).toBuffer();
-  const rm = await sharp(rot).metadata();
+  let rot = tilt === 0 ? resized : await sharp(resized).rotate(tilt, { background: BG }).toBuffer();
+
+  // Rotation grows the image's bounding box; if it would exceed the frame, shrink it
+  // to fit (Sharp refuses to composite an overlay larger than its base).
+  let rm = await sharp(rot).metadata();
+  if (rm.width > fw || rm.height > fh) {
+    const scale = Math.min(fw / rm.width, fh / rm.height);
+    rot = await sharp(rot).resize(Math.max(1, Math.round(rm.width * scale)), Math.max(1, Math.round(rm.height * scale))).toBuffer();
+    rm = await sharp(rot).metadata();
+  }
 
   const frame = await sharp({ create: { width: fw, height: fh, channels: 3, background: BG } })
     .composite([{ input: rot, left: box.x + Math.round((box.w - rm.width) / 2), top: box.y + Math.round((box.h - rm.height) / 2) }])
@@ -139,8 +181,7 @@ function matchZone(zone, classKey, entries, threshold) {
   return { match: best && best.d <= threshold ? best : null, nearest: best, ms };
 }
 
-async function benchHashChannel(index, names) {
-  const entries = index.entries.filter(e => !names || names.has(e.name));
+async function benchHashChannel(index, entries) {
   if (entries.length === 0) return null;
 
   // Mirror the app's runtime cap (cardHashes.ts): a stale meta value in an old
@@ -166,37 +207,57 @@ async function benchHashChannel(index, names) {
     return faceCache.get(entry.id + ':' + entry.face);
   }
 
-  const stats = { total: 0, correct: 0, wrongCard: 0, noMatch: 0 };
-  const distances = [];
-  const times = [];
-  let minCross = Infinity;
+  console.log('\n--- Hash channel ---');
+  console.log(`simulating ${entries.length} entries (${byCard.size} cards) of ${index.entries.length} indexed`);
 
+  // Pre-plan the work (entries that actually have a cached face) so we can
+  // report live progress as i/N while photos are being rendered.
+  const jobs = [];
   for (const [cardId, cardEntries] of byCard) {
     // Sample first / middle / last artwork of the card
     const sample = MAX_ENTRIES_PER_CARD >= cardEntries.length
       ? cardEntries
       : [cardEntries[0], cardEntries[Math.floor(cardEntries.length / 2)], cardEntries[cardEntries.length - 1]];
-
     for (const entry of sample) {
       const face = await faceFor(entry);
       if (!face) continue;
-      for (const cls of HASH_ASPECT_CLASSES) {
-        for (const tilt of TILTS) {
-          for (const fill of FILLS) {
-            const zone = await simulatePhoto(face, cls, tilt, fill);
-            const { match, ms } = matchZone(zone, cls.key, entries, effThreshold);
-            stats.total++;
-            times.push(ms);
-            if (match?.id === cardId) {
-              stats.correct++;
-              distances.push(match.d);
-            } else if (match) {
-              stats.wrongCard++;
-              // How close did the WRONG card come? That is the real ambiguity risk.
-              minCross = Math.min(minCross, match.d);
-            } else {
-              stats.noMatch++;
-            }
+      jobs.push({ cardId, entry, face });
+    }
+  }
+  const totalPhotos = jobs.length * HASH_ASPECT_CLASSES.length * TILTS.length * FILLS.length;
+  console.log(`simulating ${totalPhotos} photos (aspects x tilt ${TILTS.join('/')} x fill ${FILLS.join('/')}, q${JPEG_Q})...`);
+
+  const stats = { total: 0, correct: 0, wrongCard: 0, noMatch: 0 };
+  const distances = [];
+  const times = [];
+  let minCross = Infinity;
+  let done = 0;
+  const reportEvery = Math.max(1, Math.round(totalPhotos / 25)); // cap live output at ~25 lines
+
+  for (const { cardId, entry, face } of jobs) {
+    for (const cls of HASH_ASPECT_CLASSES) {
+      for (const tilt of TILTS) {
+        for (const fill of FILLS) {
+          const zone = await simulatePhoto(face, cls, tilt, fill);
+          const { match, ms } = matchZone(zone, cls.key, index.entries, effThreshold);
+          stats.total++;
+          times.push(ms);
+          if (match?.id === cardId) {
+            stats.correct++;
+            distances.push(match.d);
+          } else if (match) {
+            stats.wrongCard++;
+            // How close did the WRONG card come? That is the real ambiguity risk.
+            minCross = Math.min(minCross, match.d);
+          } else {
+            stats.noMatch++;
+          }
+          done++;
+          if (done % reportEvery === 0 || done === totalPhotos) {
+            console.log(
+              `  [hash] ${String(done).padStart(String(totalPhotos).length)} / ${totalPhotos} (${((100 * done) / totalPhotos).toFixed(0)}%)` +
+                `  "${entry.name}"`
+            );
           }
         }
       }
@@ -206,9 +267,8 @@ async function benchHashChannel(index, names) {
   const pct = n => ((100 * n) / stats.total).toFixed(1);
   const sorted = [...distances].sort((a, b) => a - b);
   const p = q => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : '-');
-  console.log('\n--- Hash channel ---');
-  console.log(`entries indexed: ${entries.length} (${byCard.size} cards)`);
-  console.log(`photos simulated: ${stats.total} (tilt ${TILTS.join('/')} x fill ${FILLS.join('/')} x ${HASH_ASPECT_CLASSES.length} aspects, q${JPEG_Q})`);
+  console.log(`\n--- Hash channel results ---`);
+  console.log(`photos simulated: ${stats.total}`);
   console.log(`correct id:       ${stats.correct} (${pct(stats.correct)}%)`);
   console.log(`wrong card id:    ${stats.wrongCard} (${pct(stats.wrongCard)}%)  <- misidentification risk`);
   console.log(`no match (>thr):  ${stats.noMatch} (${pct(stats.noMatch)}%)  <- falls through to OCR`);
@@ -222,8 +282,7 @@ async function benchHashChannel(index, names) {
 
 // --- OCR channel ----------------------------------------------------------------
 
-async function benchOcrChannel(index, names) {
-  const entries = index.entries.filter(e => !names || names.has(e.name));
+async function benchOcrChannel(index, entries) {
   if (entries.length === 0) return;
 
   let printings = new Map();
@@ -336,14 +395,28 @@ async function main() {
     return;
   }
 
-  const names = process.env.DECKSYNC_BENCH_CARDS
-    ? new Set(process.env.DECKSYNC_BENCH_CARDS.split(',').map(s => s.trim()).filter(Boolean))
-    : null;
+  // Optional: restrict to specific cards, e.g. DECKSYNC_BENCH_CARDS="Wall of Vipers,Swamp".
+  // Without that, simulate a small deterministic representative subset (one entry per
+  // card) instead of the full index — see selectRepresentativeEntries(). Size via
+  // DECKSYNC_BENCH_SAMPLE (default 12). Simulated photos always match against the full index.
+  const explicit = (process.env.DECKSYNC_BENCH_CARDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  let entries;
+  let label;
+  if (explicit.length) {
+    const names = new Set(explicit);
+    entries = index.entries.filter(e => names.has(e.name));
+    label = explicit.join(', ');
+  } else {
+    const sample = parseInt(process.env.DECKSYNC_BENCH_SAMPLE || '12', 10);
+    entries = selectRepresentativeEntries(index, Number.isFinite(sample) && sample > 0 ? sample : 12);
+    label = `${entries.length} representative cards: ${entries.map(e => e.name).join(', ')}`;
+  }
 
   console.log(`pHash vs OCR benchmark — threshold ${index.threshold ?? HASH_MATCH_THRESHOLD}, region ${JSON.stringify(index.region ?? HASH_ART_REGION)}`);
-  await benchHashChannel(index, names);
+  console.log(`cards: ${label}\n`);
+  await benchHashChannel(index, entries);
   if (process.env.DECKSYNC_BENCH_OCR !== '0') {
-    await benchOcrChannel(index, names);
+    await benchOcrChannel(index, entries);
   }
   benchStorage(index);
 }

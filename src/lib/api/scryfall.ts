@@ -1,7 +1,7 @@
 import type { ScryfallCard, DeckCardItem } from '../types';
 import { getCachedCard, getCachedCardById, cacheCards } from '../storage/db';
 import { pickBestNameMatch } from '../ocr/parse';
-import { ensureCardData, findPrintingId, hasCardName, isCardDataReady } from '../data/cardData';
+import { ensureCardData, findPrintingId, hasCardName, hasCardNameFuzzy, isCardDataReady } from '../data/cardData';
 
 const SCRYFALL_COLLECTION_URL = 'https://api.scryfall.com/cards/collection';
 const SCRYFALL_SEARCH_URL = 'https://api.scryfall.com/cards/search';
@@ -453,6 +453,18 @@ export async function lookupCardByPrinting(
 }
 
 /**
+ * Names a candidate reading's closeness to the local card database, for ordering:
+ *   0 = exact known name, 1 = fuzzy near-match (likely misread), 2 = unknown/noise.
+ * Pass-through (all 0) when the database isn't loaded so legacy behavior holds.
+ */
+function nameMatchTier(name: string): 0 | 1 | 2 {
+  if (!isCardDataReady()) return 0;
+  if (hasCardName(name)) return 0;
+  if (hasCardNameFuzzy(name)) return 1;
+  return 2;
+}
+
+/**
  * Fuzzy name lookup for the card-name fallback path (older cards don't print a
  * set code). Uses the local IndexedDB cache first, and — when the card database
  * is loaded — validates the candidate readings against it before any network
@@ -478,20 +490,25 @@ export async function lookupCardByName(name: string): Promise<ScryfallCard | nul
     return true;
   });
 
-  // Free local validation before spending an API call: if no candidate reading
-  // is a real card name, this is OCR noise — bail out without hitting Scryfall.
+  // Free local validation before spending an API call: if no candidate reading is
+  // even close to a real card name, this is OCR noise — bail out without hitting
+  // Scryfall. The gate is fuzzy (exact match, or near-match via containment / edit
+  // distance) so misread old-frame names still reach the server-side fuzzy search
+  // below; final resolution stays authoritative on the Scryfall response.
   // (Pass-through when the database isn't loaded, preserving legacy behavior.)
-  if (isCardDataReady() && !uniqueCandidates.some(c => hasCardName(c))) {
+  const tiers = uniqueCandidates.map(nameMatchTier);
+  if (isCardDataReady() && tiers.every(t => t === 2)) {
     return null;
   }
 
-  // Valid candidates first (in reading order) so the fuzzy loop succeeds on its
-  // first attempt instead of burning calls on garbage variants.
+  // Best candidates first (exact > fuzzy > unknown), stable within each tier so
+  // reading order is preserved — the fuzzy loop then succeeds on its first attempt
+  // instead of burning calls on garbage variants.
   const ordered = isCardDataReady()
-    ? [
-        ...uniqueCandidates.filter(c => hasCardName(c)),
-        ...uniqueCandidates.filter(c => !hasCardName(c))
-      ]
+    ? uniqueCandidates
+        .map((c, i) => ({ c, i, tier: tiers[i] }))
+        .sort((a, b) => a.tier - b.tier || a.i - b.i)
+        .map(x => x.c)
     : uniqueCandidates;
 
   for (const candidate of ordered) {

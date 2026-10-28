@@ -106,6 +106,20 @@ function cropFraction(rgba, width, height, rect) {
   return { data: out, width: cw, height: ch };
 }
 
+// Blit an RGBA card buffer centered on a BG-filled canvas. Source and dest are
+// separate buffers, so this is a plain non-overlapping copy — same geometry as the
+// previous sharp create+composite().png() step, without the PNG round-trip.
+function blitCentered(cardData, cardW, cardH, cw, ch) {
+  const out = Buffer.alloc(cw * ch * 4);
+  for (let i = 0; i < out.length; i += 4) { out[i] = BG.r; out[i+1] = BG.g; out[i+2] = BG.b; out[i+3] = 255; }
+  const ox = Math.round((cw - cardW) / 2), oy = Math.round((ch - cardH) / 2);
+  for (let y = 0; y < cardH; y++) {
+    const s = (y * cardW) * 4, d = ((oy + y) * cw + ox) * 4;
+    cardData.copy(out, d, s, s + cardW * 4);
+  }
+  return out;
+}
+
 /**
  * Hashes one face image against the 5:7 card zone. The card is centered in a
  * CARD_ASPECT box, scaled to `fill` of the box height and rotated by `angle` —
@@ -113,6 +127,10 @@ function cropFraction(rgba, width, height, rect) {
  * { [classKey]: hexHash[] } where every class carries the same list (the zone is
  * camera-independent), in fill-outer / angle-inner order. Keep in sync with
  * buildFaceHashes() in scripts/prepare-hashes.js.
+ *
+ * sharp performs resize + rotate (exact geometry); centered placement, zone/art
+ * crops and the DCT hash run in JS on raw RGBA to avoid the per-angle PNG
+ * encode/decode and large-canvas composite round-trips (~10x faster, bit-identical).
  */
 async function buildFaceHashes(bytes) {
   const meta = await sharp(bytes).metadata();
@@ -122,20 +140,18 @@ async function buildFaceHashes(bytes) {
   for (const fill of HASH_STORE_FILLS) {
     const H = Math.max(8, Math.round(zh * fill));
     const W = Math.max(8, Math.round(H * meta.width / meta.height));
-    const resized = await sharp(bytes).resize(W, H).png().toBuffer();
+    const resizedRaw = await sharp(bytes).resize(W, H).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     for (const ang of HASH_STORE_ANGLES) {
-      const rot = ang === 0 ? resized : await sharp(resized).rotate(ang, { background: BG }).png().toBuffer();
-      const rm = await sharp(rot).metadata();
+      const card = ang === 0
+        ? resizedRaw
+        : await sharp(resizedRaw.data, { raw: { width: resizedRaw.info.width, height: resizedRaw.info.height, channels: 4 } })
+          .rotate(ang, { background: BG }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       // Canvas must fit the rotated card; the zone is its central zw×zh rect.
-      const cw = Math.max(zw, rm.width);
-      const ch = Math.max(zh, rm.height);
-      const canvas = await sharp({ create: { width: cw, height: ch, channels: 3, background: BG } })
-        .composite([{ input: rot, left: Math.round((cw - rm.width) / 2), top: Math.round((ch - rm.height) / 2) }])
-        .png()
-        .toBuffer();
-      const { data, info } = await sharp(canvas).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      const cw = Math.max(zw, card.info.width);
+      const ch = Math.max(zh, card.info.height);
+      const canvas = blitCentered(card.data, card.info.width, card.info.height, cw, ch);
       // Zone (centered in the canvas), then the art region inside the zone.
-      const zone = cropFraction(data, info.width, info.height, {
+      const zone = cropFraction(canvas, cw, ch, {
         x0: (cw - zw) / 2 / cw,
         y0: (ch - zh) / 2 / ch,
         x1: 1 - (cw - zw) / 2 / cw,

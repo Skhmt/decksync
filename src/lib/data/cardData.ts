@@ -94,6 +94,71 @@ export function hasCardName(name: string): boolean {
   return db.names.has(normalizeCardName(name));
 }
 
+// Fuzzy name-validity gate for the OCR fallback path (main-thread only — not part
+// of the worker build routines in ./builders). Old-frame cards print no set code,
+// so their names come from OCR and are often misread by one or two characters. An
+// exact Set lookup (hasCardName) rejects those before they can reach Scryfall's
+// server-side fuzzy search. This gate instead lets a reading through when it is
+// *close* to a known card name — substring containment (min-length guarded, catches
+// dropped/added words) or a high Levenshtein ratio (catches small character
+// misreads). Being slightly loose is safe: final resolution stays authoritative on
+// the Scryfall response, and a false pass only costs one extra (usually 404) call.
+// Pass-through when the database isn't loaded, mirroring hasCardName.
+const NAME_FUZZY_THRESHOLD = 0.82; // min Levenshtein ratio to count as a near match
+const FUZZY_SUBSTR_MIN_LEN = 6;    // min length for substring containment to count
+
+/** Classic Levenshtein edit distance (dynamic programming, two rolling rows). */
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  const la = a.length, lb = b.length;
+  if (!la) return lb;
+  if (!lb) return la;
+  let prev = new Array(lb + 1);
+  let curr = new Array(lb + 1);
+  for (let j = 0; j <= lb; j++) prev[j] = j;
+  for (let i = 1; i <= la; i++) {
+    curr[0] = i;
+    const ca = a.charCodeAt(i - 1);
+    for (let j = 1; j <= lb; j++) {
+      const cost = ca === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[lb];
+}
+
+/** 1 - editDistance / maxLen; 1 is identical, 0 shares nothing. */
+function levenshteinRatio(a: string, b: string): number {
+  const m = Math.max(a.length, b.length);
+  if (!m) return 1;
+  return 1 - levenshteinDistance(a, b) / m;
+}
+
+/**
+ * Fuzzy card-name validity check (see the comment above). Returns true when the
+ * database isn't loaded (pass-through), on an exact match, or when some known
+ * name is close enough to `name` by containment or edit distance.
+ */
+export function hasCardNameFuzzy(name: string): boolean {
+  if (!db.ready) return true;
+  const q = normalizeCardName(name);
+  if (!q) return false;
+  if (db.names.has(q)) return true; // exact fast path
+
+  for (const n of db.names) {
+    // Substring containment, min-length guarded so tiny fragments don't match.
+    if (n.length >= FUZZY_SUBSTR_MIN_LEN && q.includes(n)) return true;
+    if (q.length >= FUZZY_SUBSTR_MIN_LEN && n.includes(q)) return true;
+    // Levenshtein ratio within a tight length window (misreads keep the length).
+    const diff = Math.abs(n.length - q.length);
+    if (diff <= Math.max(2, q.length >> 2) && levenshteinRatio(q, n) >= NAME_FUZZY_THRESHOLD) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Resolves a set code + collector number to a Scryfall card id via the local
  * printings map. Returns undefined when the pair isn't a known printing or the
