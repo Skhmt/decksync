@@ -11,6 +11,7 @@
     importIconSvg,
     saveLogIconSvg,
     warningIconSvg,
+    githubIconSvg,
   } from "../icons";
 
   let {
@@ -297,9 +298,14 @@
       {#if deckStore.extraCards.length > 0}
         <div
           class="badge badge-warning badge-xs sm:badge-sm md:badge-md gap-1 font-semibold text-neutral-900"
-          title="{deckStore.totalExtraCards} extra card{deckStore.totalExtraCards === 1 ? '' : 's'} found"
+          title="{deckStore.totalExtraCards} extra card{deckStore.totalExtraCards ===
+          1
+            ? ''
+            : 's'} found"
         >
-          <span class="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0 text-neutral-900">{@html warningIconSvg}</span>
+          <span class="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0 text-neutral-900"
+            >{@html warningIconSvg}</span
+          >
           <span>{deckStore.totalExtraCards} Extra</span>
         </div>
       {/if}
