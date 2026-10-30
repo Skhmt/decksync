@@ -1,8 +1,13 @@
 <script lang="ts">
-  import { deckStore } from '../state/deck.svelte';
-  import { getCardImageUrl, identifyScannedCard, lookupCardById, matchDeckCard } from '../api/scryfall';
-  import { isCardDataReady } from '../data/cardData';
-  import { ensureCardHashes } from '../data/cardHashes';
+  import { deckStore } from "../state/deck.svelte";
+  import {
+    getCardImageUrl,
+    identifyScannedCard,
+    lookupCardById,
+    matchDeckCard,
+  } from "../api/scryfall";
+  import { isCardDataReady } from "../data/cardData";
+  import { ensureCardHashes } from "../data/cardHashes";
   import {
     NAME_REGION,
     SET_REGION,
@@ -10,20 +15,25 @@
     captureFrame,
     initScanner,
     recognizeNameRegion,
-    recognizeSetRegion
-  } from '../ocr/cardScanner';
-  import { identifyByHash } from '../ocr/hashScanner';
-  import { warpCardToCanonical, initOpenCv } from '../ocr/cardWarp';
-  import type { DeckCardItem, ScryfallCard } from '../types';
-  import { cameraIconSvg, checkIconSvg, warningIconSvg, xmarkIconSvg } from '../icons';
+    recognizeSetRegion,
+  } from "../ocr/cardScanner";
+  import { identifyByHash } from "../ocr/hashScanner";
+  import { warpCardToCanonical, initOpenCv } from "../ocr/cardWarp";
+  import type { DeckCardItem, ScryfallCard } from "../types";
+  import {
+    cameraIconSvg,
+    checkIconSvg,
+    warningIconSvg,
+    xmarkIconSvg,
+  } from "../icons";
 
   let { isOpen, onClose }: { isOpen: boolean; onClose: () => void } = $props();
 
-  type Phase = 'starting' | 'live' | 'camera_error';
+  type Phase = "starting" | "live" | "camera_error";
 
-  let phase = $state<Phase>('starting');
-  let statusText = $state('Starting camera...');
-  let cameraError = $state('');
+  let phase = $state<Phase>("starting");
+  let statusText = $state("Starting camera...");
+  let cameraError = $state("");
 
   let videoEl: HTMLVideoElement | null = $state(null);
   // Reactive on purpose: the attach $effect below must re-run both when the
@@ -49,7 +59,7 @@
   const REARM_AFTER_MISSES = 2;
 
   // How a continuous hit was identified — surfaced as a note in the confirm modal.
-  type DetectMethod = 'hash' | 'collector' | 'name';
+  type DetectMethod = "hash" | "collector" | "name";
 
   // Continuous mode: a card was identified and is awaiting the user's decision.
   // The camera keeps running behind it — if a different card is found, this is
@@ -69,12 +79,12 @@
   // not-in-deck cards are dismissed — unless the user taps Add/Decline (or taps
   // outside) first. The bar under the prompt counts down to that moment.
   const AUTO_ACTION_MS = 5000;
-  let autoProgress = $state(0);   // 0..1, drives the countdown bar width
-  let autoStartedAt = 0;          // wall-clock start of the current countdown
-  let autoRaf = 0;                // active requestAnimationFrame id (0 = none)
+  let autoProgress = $state(0); // 0..1, drives the countdown bar width
+  let autoStartedAt = 0; // wall-clock start of the current countdown
+  let autoRaf = 0; // active requestAnimationFrame id (0 = none)
 
   // Dedup bookkeeping (plain lets — internal, never rendered)
-  let lastHitKey = '';
+  let lastHitKey = "";
   let lastHitAt = 0;
   let missesSinceHit = 0;
 
@@ -94,13 +104,17 @@
   $effect(() => {
     if (!isOpen) return;
 
-    cameraError = '';
+    cameraError = "";
     pendingHit = null;
     openCamera();
 
     // Warm up the OCR engine + OpenCV in the background so the first scan is snappy
-    void initScanner().catch(err => console.warn('OCR engine failed to initialize:', err));
-    void initOpenCv().catch(err => console.warn('OpenCV failed to initialize:', err));
+    void initScanner().catch((err) =>
+      console.warn("OCR engine failed to initialize:", err),
+    );
+    void initOpenCv().catch((err) =>
+      console.warn("OpenCV failed to initialize:", err),
+    );
     void ensureCardHashes(); // warm the pHash index so the first scan can use it
 
     return () => {
@@ -130,7 +144,7 @@
   // phase change) bumps scanToken so an in-flight attempt
   // discards its result instead of firing a stale toast.
   $effect(() => {
-    const active = isOpen && phase === 'live';
+    const active = isOpen && phase === "live";
     if (!active) return;
 
     continuousBusy = false;
@@ -151,13 +165,13 @@
   });
 
   function sleep(ms: number): Promise<void> {
-    return new Promise(r => setTimeout(r, ms));
+    return new Promise((r) => setTimeout(r, ms));
   }
 
   /** One continuous-mode attempt: a short burst of frames, lazy OCR (corner first, name bar only if needed). */
   async function continuousAttempt() {
     const token = scanToken;
-    if (!videoEl || phase !== 'live') return;
+    if (!videoEl || phase !== "live") return;
     continuousBusy = true;
 
     try {
@@ -181,12 +195,13 @@
       // Require consensus: the same card must win at least half the burst frames,
       // so a single noisy/blank frame can't force an acceptance. Only when it
       // finds nothing do we spend tesseract time on OCR.
-      const hashResult = scanFrames.length >= 2
-        ? await hashChannel(scanFrames, token, minVotes)
-        : { card: null };
+      const hashResult =
+        scanFrames.length >= 2
+          ? await hashChannel(scanFrames, token, minVotes)
+          : { card: null };
       if (token !== scanToken) return;
       if (hashResult.card) {
-        handleContinuousHit(hashResult.card, 'hash');
+        handleContinuousHit(hashResult.card, "hash");
         return;
       }
 
@@ -195,7 +210,7 @@
       if (token !== scanToken) return;
 
       let card: ScryfallCard | null = null;
-      let detectMethod: DetectMethod = 'name';
+      let detectMethod: DetectMethod = "name";
       // The parsed corner is validated against the local printings map inside
       // identifyScannedCard — free, no API call for unknown pairs — so a parse
       // is worth passing through on every attempt. Without the database loaded,
@@ -203,12 +218,12 @@
       if (setRead.parsed && (isCardDataReady() || setRead.confidence >= 60)) {
         const byCollector = await identifyScannedCard({
           setCode: setRead.parsed.setCode,
-          collectorNumber: setRead.parsed.collectorNumber
+          collectorNumber: setRead.parsed.collectorNumber,
         });
         if (token !== scanToken) return;
         if (byCollector) {
           card = byCollector;
-          detectMethod = 'collector';
+          detectMethod = "collector";
         }
       }
 
@@ -221,7 +236,7 @@
         card = await identifyScannedCard({
           name: nameRead.name,
           setCode: setRead.parsed?.setCode,
-          collectorNumber: setRead.parsed?.collectorNumber
+          collectorNumber: setRead.parsed?.collectorNumber,
         });
       }
 
@@ -232,7 +247,7 @@
         noteContinuousMiss();
       }
     } catch (err) {
-      console.warn('Continuous scan attempt failed:', err);
+      console.warn("Continuous scan attempt failed:", err);
       noteContinuousMiss();
     } finally {
       if (token === scanToken) continuousBusy = false;
@@ -243,22 +258,25 @@
   function noteContinuousMiss() {
     if (lastHitKey) {
       missesSinceHit++;
-      if (missesSinceHit >= REARM_AFTER_MISSES) lastHitKey = '';
+      if (missesSinceHit >= REARM_AFTER_MISSES) lastHitKey = "";
     }
   }
 
   /** Human-readable note for how a continuous hit was detected. */
   function detectMethodLabel(method: DetectMethod): string {
     switch (method) {
-      case 'hash': return 'Detected via image hash';
-      case 'collector': return 'Detected via collector info';
-      case 'name': return 'Detected via card name';
+      case "hash":
+        return "Detected via image";
+      case "collector":
+        return "Detected via collector info";
+      case "name":
+        return "Detected via name";
     }
   }
 
   /** A card was identified in continuous mode: dedup, then pop the confirm modal. */
   function handleContinuousHit(card: ScryfallCard, method: DetectMethod) {
-    const key = card.id || `${card.name}|${card.set ?? ''}`;
+    const key = card.id || `${card.name}|${card.set ?? ""}`;
     const now = Date.now();
     if (key === lastHitKey && now - lastHitAt < HIT_COOLDOWN_MS) return;
     lastHitKey = key;
@@ -346,67 +364,67 @@
 
   async function openCamera() {
     const token = ++scanToken;
-    phase = 'starting';
-    statusText = 'Starting camera...';
+    phase = "starting";
+    statusText = "Starting camera...";
 
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('unsupported');
+        throw new Error("unsupported");
       }
       const s = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
-          facingMode: { ideal: 'environment' },
+          facingMode: { ideal: "environment" },
           width: { ideal: 1920 },
-          height: { ideal: 1440 }
-        }
+          height: { ideal: 1440 },
+        },
       });
 
       if (token !== scanToken) {
         // Modal was closed while the permission prompt was open
-        s.getTracks().forEach(t => t.stop());
+        s.getTracks().forEach((t) => t.stop());
         return;
       }
 
       stream = s; // the attach $effect wires it to the <video> element
-      phase = 'live';
+      phase = "live";
     } catch (err) {
       if (token !== scanToken) return;
       cameraError = friendlyCameraError(err);
-      phase = 'camera_error';
+      phase = "camera_error";
     }
   }
 
   function stopStream() {
-    stream?.getTracks().forEach(t => t.stop());
+    stream?.getTracks().forEach((t) => t.stop());
     stream = null;
     if (videoEl) videoEl.srcObject = null;
   }
 
   function friendlyCameraError(err: unknown): string {
-    const name = err instanceof DOMException ? err.name : '';
-    if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-      return 'Camera access was denied. Allow camera permission for this site, then try again.';
+    const name = err instanceof DOMException ? err.name : "";
+    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+      return "Camera access was denied. Allow camera permission for this site, then try again.";
     }
-    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-      return 'No camera was found on this device.';
+    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+      return "No camera was found on this device.";
     }
-    if (name === 'NotReadableError') {
-      return 'The camera is busy in another app. Close it and try again.';
+    if (name === "NotReadableError") {
+      return "The camera is busy in another app. Close it and try again.";
     }
-    if (name === 'OverconstrainedError') {
-      return 'This camera does not support the requested settings. Try again or use a different device.';
+    if (name === "OverconstrainedError") {
+      return "This camera does not support the requested settings. Try again or use a different device.";
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      return 'This browser does not support camera access.';
+      return "This browser does not support camera access.";
     }
-    return 'Could not start the camera. Please try again.';
+    return "Could not start the camera. Please try again.";
   }
 
   // --- Capture -------------------------------------------------------------
 
   function nextFrame(): Promise<void> {
-    return new Promise(r => setTimeout(r, BURST_INTERVAL_MS));
+    return new Promise((r) => setTimeout(r, BURST_INTERVAL_MS));
   }
 
   // --- Scan pipeline ------------------------------------------------------
@@ -417,7 +435,9 @@
   }
 
   /** Warps each frame to a canonical card; returns only the frames where OpenCV found one. */
-  async function warpFrames(frames: HTMLCanvasElement[]): Promise<HTMLCanvasElement[]> {
+  async function warpFrames(
+    frames: HTMLCanvasElement[],
+  ): Promise<HTMLCanvasElement[]> {
     const out: HTMLCanvasElement[] = [];
     for (const f of frames) {
       const w = await warpCardToCanonical(f);
@@ -434,15 +454,22 @@
    * frames before it's accepted (continuous mode passes half the burst to guard
    * against a single noisy/blank frame forcing an accidental hit).
    */
-  async function hashChannel(frames: HTMLCanvasElement[], token: number, minVotes = 1): Promise<ChannelResult> {
+  async function hashChannel(
+    frames: HTMLCanvasElement[],
+    token: number,
+    minVotes = 1,
+  ): Promise<ChannelResult> {
     try {
-      const match = await identifyByHash(frames, frames[0].width / frames[0].height);
+      const match = await identifyByHash(
+        frames,
+        frames[0].width / frames[0].height,
+      );
       if (!match || match.votes < minVotes) return { card: null };
       const card = await lookupCardById(match.entry.id);
       if (token !== scanToken) return { card: null };
       return { card };
     } catch (err) {
-      console.warn('Hash identification failed:', err);
+      console.warn("Hash identification failed:", err);
       return { card: null };
     }
   }
@@ -462,7 +489,9 @@
 {#if isOpen}
   <div class="fixed inset-0 z-50 bg-black flex flex-col">
     <!-- Top bar -->
-    <div class="flex items-center justify-between px-2 sm:px-4 py-2.5 text-white/90 shrink-0">
+    <div
+      class="flex items-center justify-between px-2 sm:px-4 py-2.5 text-white/90 shrink-0"
+    >
       <button
         onclick={handleClose}
         class="btn btn-circle btn-ghost btn-sm text-white/70 hover:text-white"
@@ -477,47 +506,72 @@
       <span class="w-6"></span>
     </div>
 
-      <!-- Camera view -->
-      <div class="flex-1 min-h-0 flex items-center justify-center px-2 sm:px-4 pb-2">
-        <div class="relative max-w-full" style="aspect-ratio: {videoAspect}; height: 100%;">
-          <video
-            bind:this={videoEl}
-            autoplay
-            playsinline
-            muted
-            onloadedmetadata={handleVideoMetadata}
-            class="w-full h-full object-fill rounded-xl bg-black"
-          ></video>
+    <!-- Camera view -->
+    <div
+      class="flex-1 min-h-0 flex items-center justify-center px-2 sm:px-4 pb-2"
+    >
+      <div
+        class="relative max-w-full"
+        style="aspect-ratio: {videoAspect}; height: 100%;"
+      >
+        <video
+          bind:this={videoEl}
+          autoplay
+          playsinline
+          muted
+          onloadedmetadata={handleVideoMetadata}
+          class="w-full h-full object-fill rounded-xl bg-black"
+        ></video>
 
-          <!-- Framing guide (mirrors the OCR crop regions) -->
-          {#if phase === 'live'}
-            <div class="absolute inset-0 pointer-events-none">
-              <div
-                class="absolute rounded-lg border-2 border-dashed border-white/40"
-                style="left: {cardZone.x0 * 100}%; top: {cardZone.y0 * 100}%; width: {(cardZone.x1 - cardZone.x0) * 100}%; height: {(cardZone.y1 - cardZone.y0) * 100}%;"
-              ></div>
-              <div
-                class="absolute rounded-md border border-primary/70 bg-primary/10"
-                style="left: {zoneX(NAME_REGION.x0) * 100}%; top: {zoneY(NAME_REGION.y0) * 100}%; width: {zoneW(NAME_REGION.x1 - NAME_REGION.x0) * 100}%; height: {zoneH(NAME_REGION.y1 - NAME_REGION.y0) * 100}%;"
+        <!-- Framing guide (mirrors the OCR crop regions) -->
+        {#if phase === "live"}
+          <div class="absolute inset-0 pointer-events-none">
+            <div
+              class="absolute rounded-lg border-2 border-dashed border-white/40"
+              style="left: {cardZone.x0 * 100}%; top: {cardZone.y0 *
+                100}%; width: {(cardZone.x1 - cardZone.x0) *
+                100}%; height: {(cardZone.y1 - cardZone.y0) * 100}%;"
+            ></div>
+            <div
+              class="absolute rounded-md border border-primary/70 bg-primary/10"
+              style="left: {zoneX(NAME_REGION.x0) * 100}%; top: {zoneY(
+                NAME_REGION.y0,
+              ) * 100}%; width: {zoneW(NAME_REGION.x1 - NAME_REGION.x0) *
+                100}%; height: {zoneH(NAME_REGION.y1 - NAME_REGION.y0) * 100}%;"
+            >
+              <span
+                class="absolute left-1 top-0.5 text-[9px] font-medium text-white/70 bg-black/40 rounded px-1"
+                >card name</span
               >
-                <span class="absolute left-1 top-0.5 text-[9px] font-medium text-white/70 bg-black/40 rounded px-1">card name</span>
-              </div>
-              <div
-                class="absolute rounded-md border border-primary/70 bg-primary/10"
-                style="left: {zoneX(SET_REGION.x0) * 100}%; top: {zoneY(SET_REGION.y0) * 100}%; width: {zoneW(SET_REGION.x1 - SET_REGION.x0) * 100}%; height: {zoneH(SET_REGION.y1 - SET_REGION.y0) * 100}%;"
-              >
-                <span class="absolute left-1 top-0.5 text-[9px] font-medium text-white/70 bg-black/40 rounded px-1">set code & #</span>
-              </div>
             </div>
-          {/if}
+            <div
+              class="absolute rounded-md border border-primary/70 bg-primary/10"
+              style="left: {zoneX(SET_REGION.x0) * 100}%; top: {zoneY(
+                SET_REGION.y0,
+              ) * 100}%; width: {zoneW(SET_REGION.x1 - SET_REGION.x0) *
+                100}%; height: {zoneH(SET_REGION.y1 - SET_REGION.y0) * 100}%;"
+            >
+              <span
+                class="absolute left-1 top-0.5 text-[9px] font-medium text-white/70 bg-black/40 rounded px-1"
+                >set code & #</span
+              >
+            </div>
+          </div>
+        {/if}
 
-          <!-- Continuous mode: confirm a found card (camera keeps running behind it) -->
-          {#if pendingHit}
-            <!-- Backdrop: tapping anywhere outside the prompt cancels / dismisses it -->
-            <div class="absolute inset-0 z-10" role="presentation" onclick={declinePendingHit}></div>
+        <!-- Continuous mode: confirm a found card (camera keeps running behind it) -->
+        {#if pendingHit}
+          <!-- Backdrop: tapping anywhere outside the prompt cancels / dismisses it -->
+          <div
+            class="absolute inset-0 z-10"
+            role="presentation"
+            onclick={declinePendingHit}
+          ></div>
 
-            <div class="absolute inset-x-0 bottom-2 z-20 flex justify-center px-2 pointer-events-none">
-              {#key pendingHit.key}
+          <div
+            class="absolute inset-x-0 bottom-2 z-20 flex justify-center px-2 pointer-events-none"
+          >
+            {#key pendingHit.key}
               <div
                 role="dialog"
                 aria-label="Confirm scanned card"
@@ -530,27 +584,48 @@
                     class="w-14 h-auto rounded-md border border-base-300 shadow-sm shrink-0"
                   />
                   <div class="min-w-0 flex-1">
-                    <h3 class="font-bold text-sm leading-snug">{pendingHit.card.name}</h3>
-                    <p class="text-[11px] text-base-content/60 mt-0.5 truncate">{pendingHit.card.type_line || 'Card'}</p>
-                      <p class="text-[10px] text-base-content/40 mt-0.5">{detectMethodLabel(pendingHit.method)}</p>
+                    <h3 class="font-bold text-sm leading-snug">
+                      {pendingHit.card.name}
+                    </h3>
+                    <p class="text-[11px] text-base-content/60 mt-0.5 truncate">
+                      {pendingHit.card.type_line || "Card"}
+                    </p>
+                    <p class="text-[10px] text-base-content/40 mt-0.5">
+                      {detectMethodLabel(pendingHit.method)}
+                    </p>
                   </div>
                 </div>
 
                 {#if pendingHit.deckCard}
                   {#if pendingHit.deckCard.verifiedCount >= pendingHit.deckCard.targetCount}
-                    <div class="mt-2.5 flex items-center gap-2 text-xs bg-warning/15 border border-warning/40 text-warning rounded-lg px-2.5 py-1.5">
-                      <span class="w-3.5 h-3.5 shrink-0 text-warning">{@html warningIconSvg}</span>
-                      In your deck — already found {pendingHit.deckCard.verifiedCount} of {pendingHit.deckCard.targetCount} (adding will exceed target)
+                    <div
+                      class="mt-2.5 flex items-center gap-2 text-xs bg-warning/15 border border-warning/40 text-warning rounded-lg px-2.5 py-1.5"
+                    >
+                      <span class="w-3.5 h-3.5 shrink-0 text-warning"
+                        >{@html warningIconSvg}</span
+                      >
+                      In your deck — already found {pendingHit.deckCard
+                        .verifiedCount} of {pendingHit.deckCard.targetCount} (adding
+                      will exceed target)
                     </div>
                   {:else}
-                    <div class="mt-2.5 flex items-center gap-2 text-xs bg-success/10 border border-success/30 text-success rounded-lg px-2.5 py-1.5">
-                      <span class="w-3.5 h-3.5 shrink-0">{@html checkIconSvg}</span>
-                      In your deck — {pendingHit.deckCard.verifiedCount} of {pendingHit.deckCard.targetCount} found so far
+                    <div
+                      class="mt-2.5 flex items-center gap-2 text-xs bg-success/10 border border-success/30 text-success rounded-lg px-2.5 py-1.5"
+                    >
+                      <span class="w-3.5 h-3.5 shrink-0"
+                        >{@html checkIconSvg}</span
+                      >
+                      In your deck — {pendingHit.deckCard.verifiedCount} of {pendingHit
+                        .deckCard.targetCount} found so far
                     </div>
                   {/if}
                 {:else}
-                  <div class="mt-2.5 flex items-center gap-2 text-xs bg-warning/10 border border-warning/30 rounded-lg px-2.5 py-1.5">
-                    <span class="w-3.5 h-3.5 shrink-0">{@html warningIconSvg}</span>
+                  <div
+                    class="mt-2.5 flex items-center gap-2 text-xs bg-warning/10 border border-warning/30 rounded-lg px-2.5 py-1.5"
+                  >
+                    <span class="w-3.5 h-3.5 shrink-0"
+                      >{@html warningIconSvg}</span
+                    >
                     Not in your deck — nothing to mark
                   </div>
                 {/if}
@@ -562,12 +637,19 @@
                       title="Mark one copy as found"
                       class="btn btn-primary btn-sm flex-1 gap-1.5"
                     >
-                      <span class="w-3.5 h-3.5 shrink-0">{@html checkIconSvg}</span>
+                      <span class="w-3.5 h-3.5 shrink-0"
+                        >{@html checkIconSvg}</span
+                      >
                       Add
                     </button>
                   {/if}
-                  <button onclick={declinePendingHit} class="btn btn-outline btn-sm flex-1 gap-1.5">
-                    <span class="w-3.5 h-3.5 shrink-0">{@html xmarkIconSvg}</span>
+                  <button
+                    onclick={declinePendingHit}
+                    class="btn btn-outline btn-sm flex-1 gap-1.5"
+                  >
+                    <span class="w-3.5 h-3.5 shrink-0"
+                      >{@html xmarkIconSvg}</span
+                    >
                     Decline
                   </button>
                 </div>
@@ -575,54 +657,80 @@
                 <!-- Countdown: resolves the prompt automatically after a few seconds -->
                 <div class="mt-3">
                   <p class="mb-1 text-[10px] text-base-content/50">
-                    {pendingHit.deckCard ? 'Adding automatically…' : 'Dismissing automatically…'}
+                    {pendingHit.deckCard
+                      ? "Adding automatically…"
+                      : "Dismissing automatically…"}
                   </p>
-                  <div class="h-1.5 w-full overflow-hidden rounded-full bg-base-200">
+                  <div
+                    class="h-1.5 w-full overflow-hidden rounded-full bg-base-200"
+                  >
                     <div
-                      class="h-full rounded-full {pendingHit.deckCard ? 'bg-success' : 'bg-warning'}"
+                      class="h-full rounded-full {pendingHit.deckCard
+                        ? 'bg-success'
+                        : 'bg-warning'}"
                       style="width: {autoProgress * 100}%"
                     ></div>
                   </div>
                 </div>
               </div>
-              {/key}
-            </div>
-          {/if}
+            {/key}
+          </div>
+        {/if}
 
-          <!-- Starting overlay -->
-          {#if phase === 'starting'}
-            <div class="absolute inset-0 rounded-xl bg-black flex flex-col items-center justify-center gap-3">
-              <div class="w-10 h-10 rounded-full border-[3px] border-white/60 border-t-transparent animate-spin"></div>
-              <p class="text-sm text-white/70">{statusText}</p>
-            </div>
-          {/if}
-        </div>
+        <!-- Starting overlay -->
+        {#if phase === "starting"}
+          <div
+            class="absolute inset-0 rounded-xl bg-black flex flex-col items-center justify-center gap-3"
+          >
+            <div
+              class="w-10 h-10 rounded-full border-[3px] border-white/60 border-t-transparent animate-spin"
+            ></div>
+            <p class="text-sm text-white/70">{statusText}</p>
+          </div>
+        {/if}
       </div>
+    </div>
 
     <!-- Bottom controls -->
     <div class="shrink-0 px-4 pt-2 pb-[max(env(safe-area-inset-bottom),12px)]">
-      {#if phase === 'live'}
+      {#if phase === "live"}
         <div class="flex flex-col items-center gap-3">
           <!-- The scanner works on its own; this is just a live status -->
           <div class="h-24 flex items-center justify-center">
-            <div class="flex flex-col items-center gap-2" title="Scanning automatically — no tap needed">
-              <span class="w-16 h-16 rounded-full border-4 border-success/70 bg-success/15 flex items-center justify-center">
-                <span class="w-3.5 h-3.5 rounded-full bg-success animate-pulse"></span>
+            <div
+              class="flex flex-col items-center gap-2"
+              title="Scanning automatically — no tap needed"
+            >
+              <span
+                class="w-16 h-16 rounded-full border-4 border-success/70 bg-success/15 flex items-center justify-center"
+              >
+                <span class="w-3.5 h-3.5 rounded-full bg-success animate-pulse"
+                ></span>
               </span>
-              <span class="text-[10px] text-white/60">{continuousBusy ? 'Reading card…' : 'Scanning'}</span>
+              <span class="text-[10px] text-white/60"
+                >{continuousBusy ? "Reading card…" : "Scanning"}</span
+              >
             </div>
           </div>
 
           <p class="text-center text-[11px] text-white/40 leading-snug">
-            Hold a card inside the frame — you'll get a prompt to add or decline it.
+            Hold a card inside the frame — you'll get a prompt to add or decline
+            it.
           </p>
         </div>
-      {:else if phase === 'camera_error'}
-        <div class="flex flex-col items-center gap-3 text-white/80 py-4 px-6 text-center">
+      {:else if phase === "camera_error"}
+        <div
+          class="flex flex-col items-center gap-3 text-white/80 py-4 px-6 text-center"
+        >
           <p class="text-sm">{cameraError}</p>
           <div class="flex gap-2">
-            <button onclick={openCamera} class="btn btn-primary btn-sm">Retry</button>
-            <button onclick={handleClose} class="btn btn-ghost btn-sm text-white/70">Close</button>
+            <button onclick={openCamera} class="btn btn-primary btn-sm"
+              >Retry</button
+            >
+            <button
+              onclick={handleClose}
+              class="btn btn-ghost btn-sm text-white/70">Close</button
+            >
           </div>
         </div>
       {/if}
