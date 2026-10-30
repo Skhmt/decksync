@@ -23,7 +23,7 @@ Both `dev` and `build` automatically run the pre-build steps first (`predev` / `
 ### Card data pre-build step
 
 `dev` and `build` first run `scripts/prepare-data.js`, which downloads MTGJSON v5
-card data (cached in `scripts/.cache/` for 7 days) and generates
+card data (cached in `scripts/.cache/` for 1 day) and generates
 `public/card-data.json`: a list of all card names plus a
 `set:collector number → Scryfall id` index. The app loads it on launch so the
 card scanner can validate OCR readings locally — unknown set/number pairs and
@@ -34,10 +34,15 @@ resolve via the local IndexedDB cache (zero API calls after the first scan).
 - The generated file and download cache are gitignored; the script fails soft
   (keeps the previous data) when offline.
 
+You must manually run `npm run prepare:hashes` locally. It will generate `public/card-hashes.bin` 
+and in the process, download ~100k card faces (many cards have alternate art). This takes about 
+28 hours of downloading given Scryfall's rate limit. The card face cache is gitignored and is 
+roughly 10 GB of disk space. `card-hashes.bin` is *not* gitignored.
+
 ## Scripts
 
 All build, index-maintenance, benchmarking and diagnostic tooling lives in `scripts/`.
-The three `prepare:*` scripts run automatically before `dev` / `build`; everything else
+The two `prepare:*` scripts run automatically before `dev` / `build`; everything else
 is run manually.
 
 ### Pre-build (auto-run before `dev` / `build`)
@@ -46,7 +51,10 @@ is run manually.
 | --- | --- | --- |
 | `prepare-data.js` | `npm run prepare:data` | Downloads MTGJSON v5 card data and generates `public/card-data.json` — a local index of all normalized card names plus a `set:collector number → Scryfall id` map. Lets the scanner validate OCR readings locally and resolve known printings with zero API calls after the first scan. Fails soft when offline (keeps the previous data). |
 | `prepare-opencv.js` | `npm run prepare:opencv` | Copies the self-contained OpenCV.js build from `node_modules/@techstark/opencv-js` into `public/opencv/` so it is served from the app's own origin and cached for offline use. It is loaded lazily at scan time, never bundled into the initial page load. Fails soft if the package isn't installed yet. |
-| `prepare-hashes.js` | `npm run prepare:hashes` | Builds `public/card-hashes.bin`, a compact binary index of 64-bit perceptual hashes (pHash) of card artwork — the network-free identification channel that runs in parallel with OCR. Downloads each face image from Scryfall, hashes the central art region once per camera-aspect class and per stored variant (tilt angle × fill scale), and drops reprints that share artwork. Append-only and resumable: progress lives in side-car ledgers under `scripts/.cache/`, so cancelling (Ctrl+C) loses nothing — re-run to resume exactly where it stopped. |
+
+### Pre-build (*NOT* auto-run before `dev` / `build`)
+
+`npm run prepare:hashes` builds `public/card-hashes.bin`, a compact binary index of 64-bit perceptual hashes (pHash) of card artwork — the network-free identification channel that runs in parallel with OCR. Downloads each face image from Scryfall, hashes the central art region once per camera-aspect class and per stored variant (tilt angle × fill scale), and drops reprints that share artwork. Append-only and resumable: progress lives in side-car ledgers under `scripts/.cache/`, so cancelling (Ctrl+C) loses nothing — re-run to resume exactly where it stopped.
 
 `prepare-hashes.js` target list (in priority order):
 - `DECKSYNC_HASH_CARDS="Card A, Card B"` — index exactly these names;
@@ -58,7 +66,7 @@ is run manually.
 | Script | npm script | What it does |
 | --- | --- | --- |
 | `rebuild-hashes-offline.js` | `npm run rebuild:hashes` | Regenerates `card-hashes.bin` **offline** from the locally cached face images (`scripts/.cache/hashes/`) using the true 5:7 card-zone geometry, with no network calls. Re-hashes only faces recorded as "accepted" so coverage is unchanged — only the hash values change to match the current crop. Writes to a `.tmp` file first and backs up the previous index to `card-hashes.bin.bak` before promoting. Supports `--dry-run`, `--limit=N` and `--concurrency=N`. |
-| `topup-hashes.js` | `npm run topup:hashes` | Re-downloads face images that are missing from `scripts/.cache/hashes/` so the pHash-vs-OCR benchmark can simulate a photo for every indexed card. One Scryfall API call per id, paced to 1 req/s, resumable via a side ledger (`topup-progress.jsonl`). Env: `DECKSYNC_TOPUP_LIMIT`, `DECKSYNC_TOPUP_NAMES`. |
+| `topup-hashes.js` | `npm run topup:hashes` | Re-downloads face images that are missing from `scripts/.cache/hashes/`. One Scryfall API call per id, paced to 1 req/s, resumable via a side ledger (`topup-progress.jsonl`). Env: `DECKSYNC_TOPUP_LIMIT`, `DECKSYNC_TOPUP_NAMES`. |
 
 ### Shared library
 
