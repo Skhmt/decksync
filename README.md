@@ -58,7 +58,7 @@ is run manually.
 | Script | npm script | What it does |
 | --- | --- | --- |
 | `rebuild-hashes-offline.js` | `npm run rebuild:hashes` | Regenerates `card-hashes.bin` **offline** from the locally cached face images (`scripts/.cache/hashes/`) using the true 5:7 card-zone geometry, with no network calls. Re-hashes only faces recorded as "accepted" so coverage is unchanged — only the hash values change to match the current crop. Writes to a `.tmp` file first and backs up the previous index to `card-hashes.bin.bak` before promoting. Supports `--dry-run`, `--limit=N` and `--concurrency=N`. |
-| `topup-hashes.js` | — (run directly) | Re-downloads face images that are missing from `scripts/.cache/hashes/` so the pHash-vs-OCR benchmark can simulate a photo for every indexed card. One Scryfall API call per id, paced to 1 req/s, resumable via a side ledger (`topup-progress.jsonl`). Env: `DECKSYNC_TOPUP_LIMIT`, `DECKSYNC_TOPUP_NAMES`. |
+| `topup-hashes.js` | `npm run topup:hashes` | Re-downloads face images that are missing from `scripts/.cache/hashes/` so the pHash-vs-OCR benchmark can simulate a photo for every indexed card. One Scryfall API call per id, paced to 1 req/s, resumable via a side ledger (`topup-progress.jsonl`). Env: `DECKSYNC_TOPUP_LIMIT`, `DECKSYNC_TOPUP_NAMES`. |
 
 ### Shared library
 
