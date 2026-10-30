@@ -12,6 +12,7 @@
   import GameChangerModal from './lib/components/GameChangerModal.svelte';
   import CopyLimitModal from './lib/components/CopyLimitModal.svelte';
   import NotLegalModal from './lib/components/NotLegalModal.svelte';
+  import AboutModal from './lib/components/AboutModal.svelte';
   import CardScanModal from './lib/components/CardScanModal.svelte';
   import VerificationToast from './lib/components/VerificationToast.svelte';
   import CategoryNav from './lib/components/CategoryNav.svelte';
@@ -23,6 +24,7 @@
   let isGameChangersOpen = $state(false);
   let isCopyLimitOpen = $state(false);
   let isNotLegalOpen = $state(false);
+  let isAboutOpen = $state(false);
   let isScanOpen = $state(false);
   let headerHeight = $state(60);
   let filterBarHeight = $state(56);
@@ -46,6 +48,7 @@
     onOpenGameChangers={() => isGameChangersOpen = true}
     onOpenCopyLimit={() => isCopyLimitOpen = true}
     onOpenNotLegal={() => isNotLegalOpen = true}
+    onOpenAbout={() => isAboutOpen = true}
   />
 
   <!-- Format Warnings Banner (if card count invalid or banned cards) -->
@@ -125,6 +128,7 @@
   <GameChangerModal isOpen={isGameChangersOpen} onClose={() => isGameChangersOpen = false} />
   <CopyLimitModal isOpen={isCopyLimitOpen} onClose={() => isCopyLimitOpen = false} />
   <NotLegalModal isOpen={isNotLegalOpen} onClose={() => isNotLegalOpen = false} />
+  <AboutModal isOpen={isAboutOpen} onClose={() => isAboutOpen = false} />
   <CardScanModal isOpen={isScanOpen} onClose={() => isScanOpen = false} />
 
   <!-- Bottom toast with undo when a card is verified or removed in the filtered views -->

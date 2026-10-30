@@ -8,7 +8,6 @@
     clockIconSvg,
     cloneIconSvg,
     colorIcons,
-    githubIconSvg,
     importIconSvg,
     saveLogIconSvg,
     warningIconSvg,
@@ -22,6 +21,7 @@
     onOpenGameChangers,
     onOpenCopyLimit,
     onOpenNotLegal,
+    onOpenAbout,
   }: {
     headerHeight?: number;
     onOpenImport: () => void;
@@ -30,6 +30,7 @@
     onOpenGameChangers: () => void;
     onOpenCopyLimit: () => void;
     onOpenNotLegal: () => void;
+    onOpenAbout: () => void;
   } = $props();
 
   const formats: { value: MTGFormat; label: string }[] = [
@@ -101,11 +102,18 @@
     <div class="flex items-center justify-between gap-2 w-full md:w-auto">
       <!-- Brand & Deck Title -->
       <div class="flex items-center gap-2 sm:gap-3 min-w-0">
-        <img
-          src={`${import.meta.env.BASE_URL}icon.png`}
-          alt="DeckSync"
-          class="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl shadow-md object-contain shrink-0"
-        />
+        <button
+          onclick={onOpenAbout}
+          class="shrink-0 cursor-pointer"
+          title="About DeckSync"
+          aria-label="About DeckSync"
+        >
+          <img
+            src={`${import.meta.env.BASE_URL}icon.png`}
+            alt="DeckSync"
+            class="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl shadow-md object-contain"
+          />
+        </button>
         <div class="min-w-0">
           <div class="flex items-center gap-1.5 sm:gap-2">
             <h1
@@ -335,17 +343,6 @@
       >
         <span class="w-5 h-5">{@html clockIconSvg}</span>
       </button>
-
-      <a
-        href="https://github.com/Skhmt/decksync"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="btn btn-ghost btn-sm btn-square"
-        title="DeckSync on GitHub"
-        aria-label="DeckSync on GitHub"
-      >
-        <span class="w-5 h-5">{@html githubIconSvg}</span>
-      </a>
     </div>
   </div>
 

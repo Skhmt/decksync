@@ -287,6 +287,12 @@ async function main() {
 
     mkdirSync(path.dirname(OUT_FILE), { recursive: true });
     writeFileSync(OUT_FILE, output);
+
+    // Write app metadata (version + data pull date) for the About modal.
+    const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    const metaFile = path.join(ROOT, 'public', 'app-meta.json');
+    writeFileSync(metaFile, JSON.stringify({ version: pkg.version, dataPullDate: new Date().toISOString() }));
+
     console.log(
       `[prepare-data] wrote ${path.relative(ROOT, OUT_FILE)}: ` +
         `${names.size} names, ${Object.keys(printings).length} printings, ` +
