@@ -171,17 +171,6 @@
         >
           <span class="w-4 h-4">{@html clockIconSvg}</span>
         </button>
-
-        <a
-          href="https://github.com/Skhmt/decksync"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="btn btn-ghost btn-xs sm:btn-sm btn-square"
-          title="DeckSync on GitHub"
-          aria-label="DeckSync on GitHub"
-        >
-          <span class="w-4 h-4">{@html githubIconSvg}</span>
-        </a>
       </div>
     </div>
 
