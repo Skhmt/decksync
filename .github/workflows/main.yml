@@ -6,7 +6,7 @@ on:
   push:
     branches: ['main']
 
-  # Runs automatically every day at 10am UTC / 2am PST
+  # Runs automatically every day at 10am UTC / 2am PST / 5am EST
   schedule:
     - cron: '0 10 * * *'
 
