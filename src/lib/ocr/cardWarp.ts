@@ -219,7 +219,7 @@ function canonicalDst(): { x: number; y: number }[] {
 function orderQuad(pts: { x: number; y: number }[]): { x: number; y: number }[] {
   const bySum = [...pts].sort((a, b) => a.x + a.y - (b.x + b.y));
   const byDiff = [...pts].sort((a, b) => a.y - a.x - (b.y - b.x));
-  return [bySum[0], byDiff[1], bySum[3], byDiff[0]];
+  return [bySum[0], byDiff[0], bySum[3], byDiff[3]];
 }
 
 /** Effective width/height ratio from the ordered quad's edge lengths. */

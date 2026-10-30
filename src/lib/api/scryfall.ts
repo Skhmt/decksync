@@ -511,7 +511,12 @@ export async function lookupCardByName(name: string): Promise<ScryfallCard | nul
         .map(x => x.c)
     : uniqueCandidates;
 
+  let firstAttempt = true;
   for (const candidate of ordered) {
+    // Be polite to the rate limit between attempts (skipped before the first call).
+    if (!firstAttempt) await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));
+    firstAttempt = false;
+
     // IndexedDB cache first — repeat scans of the same card cost zero API calls.
     const cached = await getCachedCard(candidate);
     if (cached) return cached;
@@ -526,8 +531,6 @@ export async function lookupCardByName(name: string): Promise<ScryfallCard | nul
       console.warn('Scryfall fuzzy name lookup failed:', err);
       return null;
     }
-    // Be polite to the rate limit between attempts
-    await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));
   }
 
   // Prefix search anchored on the first substantial word(s) of the reading.

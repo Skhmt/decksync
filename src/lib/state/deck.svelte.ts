@@ -463,10 +463,14 @@ export class DeckState {
 
     const checkedStatus: Record<string, number> = {};
     const scanCounts: Record<string, number> = {};
+    // Key by section|name (not bare name) so the same card in mainboard and
+    // sideboard don't collide. Card ids are regenerated on each parse, so they
+    // can't be used as a stable cross-session key.
     for (const c of this.cards) {
-      checkedStatus[c.name] = c.verifiedCount;
+      const key = `${c.section}|${c.name}`;
+      checkedStatus[key] = c.verifiedCount;
       if (c.scanCount && c.scanCount > 0) {
-        scanCounts[c.name] = c.scanCount;
+        scanCounts[key] = c.scanCount;
       }
     }
 
@@ -496,19 +500,24 @@ export class DeckState {
       this.format = session.format || 'commander';
       await this.loadFromText(session.rawPayload, session.name);
 
-      // Restore checked counts
+      // Restore checked counts. Keyed by section|name to match persistSession —
+      // bare-name keys collide when a card appears in multiple sections. Older
+      // sessions used bare names, so fall back to that for graceful migration.
       if (session.checkedStatus) {
         for (const card of this.cards) {
-          if (typeof session.checkedStatus[card.name] === 'number') {
+          const key = `${card.section}|${card.name}`;
+          const saved = session.checkedStatus[key] ?? session.checkedStatus[card.name];
+          if (typeof saved === 'number') {
             // Never restore a negative count
-            card.verifiedCount = Math.max(0, session.checkedStatus[card.name]);
+            card.verifiedCount = Math.max(0, saved);
           }
         }
       }
       // Restore camera capture counts (absent in older sessions)
       if (session.scanCounts) {
         for (const card of this.cards) {
-          const scans = session.scanCounts[card.name];
+          const key = `${card.section}|${card.name}`;
+          const scans = session.scanCounts[key] ?? session.scanCounts[card.name];
           if (typeof scans === 'number' && scans > 0) {
             card.scanCount = scans;
           }
