@@ -52,7 +52,7 @@ const MTGJSON_BASE = 'https://mtgjson.com/api/v5';
 const USER_AGENT = 'DeckSync/1.0 (pre-build card data preparation)';
 const FETCH_TIMEOUT_MS = 5 * 60 * 1000;
 /** Re-download cached sources after this long (new sets / data fixes). */
-const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const CACHE_TTL_MS = 1 * 24 * 60 * 60 * 1000;
 
 const SOURCES = [
   { key: 'atomicCards', url: `${MTGJSON_BASE}/AtomicCards.json.gz`, file: 'AtomicCards.json.gz' },
