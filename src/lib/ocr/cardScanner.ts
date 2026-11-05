@@ -54,15 +54,25 @@ export interface FrameRect {
 export const CARD_ASPECT = 2.5 / 3.5;
 
 /**
+ * Fraction of each frame dimension kept free around the card zone (the dashed
+ * framing guide). A larger value makes the guide smaller, so a card can be held
+ * closer — within the phone camera's focus range (~8 in) — instead of filling
+ * most of the view. MUST stay in sync with canonicalDst() in cardWarp.ts, which
+ * places the warped card at this same margin inside OUT_W×OUT_H so the OCR and
+ * pHash crops (fractions of cardZoneForFrame()) land on the actual card pixels.
+ */
+export const CARD_ZONE_MARGIN = 0.25;
+
+/**
  * The on-screen "card zone": where the user lines up a physical card. It is
  * always a true MTG-card rectangle (CARD_ASPECT), centered in the camera frame
- * and scaled to fill as much of the frame as possible while leaving a small
- * margin. Matching a real card's shape means the dashed guide is exactly
- * card-shaped, and the OCR regions below (fractions of this zone) line up with
- * the card's name bar and set-code corner for any camera aspect ratio.
+ * and scaled to fill as much of the frame as possible while leaving CARD_ZONE_MARGIN
+ * free on every side. Matching a real card's shape means the dashed guide is
+ * exactly card-shaped, and the OCR regions below (fractions of this zone) line up
+ * with the card's name bar and set-code corner for any camera aspect ratio.
  */
 export function cardZoneForFrame(frameAspect: number): FrameRect {
-  const margin = 0.05; // fraction of each frame dimension kept free around the card
+  const margin = CARD_ZONE_MARGIN; // fraction of each frame dimension kept free around the card
   const availW = 1 - 2 * margin;
   const availH = 1 - 2 * margin;
   // Fit a CARD_ASPECT (width/height) rectangle in *pixel* terms inside the

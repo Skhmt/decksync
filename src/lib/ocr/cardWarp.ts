@@ -1,4 +1,4 @@
-import { CARD_ASPECT } from './cardScanner';
+import { CARD_ASPECT, CARD_ZONE_MARGIN } from './cardScanner';
 
 /**
  * On-device card localization + perspective correction via OpenCV.js.
@@ -24,8 +24,11 @@ export const OUT_H = Math.round(OUT_W / CARD_ASPECT); // === 840 (2.5/3.5)
 
 // Detection runs on a downscaled frame so findContours stays fast.
 const DETECT_MAX_DIM = 512;
-// The card must cover at least this fraction of the frame area to count.
-const MIN_AREA_FRAC = 0.12;
+// The card must cover at least this fraction of the frame area to count. Kept low
+// because with the smaller framing guide (CARD_ZONE_MARGIN) a card held within
+// focus range (~8 in) occupies less of the frame than it did when the guide filled
+// most of the view, so we still want the warp to lock onto it.
+const MIN_AREA_FRAC = 0.08;
 // Acceptable width/height range for the detected quad (tolerates tilt + perspective).
 const ASPECT_MIN = 0.5;
 const ASPECT_MAX = 0.95;
@@ -111,9 +114,9 @@ async function resolveCv(mod: any): Promise<OpenCvApi> {
 }
 /**
  * Detects the card in `frame` and returns a canonical 5:7 canvas with the card
- * upright and de-skewed, occupying the central 90% (so it lines up exactly with
- * cardZoneForFrame()'s zone for OCR + hashing). Returns null when no plausible
- * card quadrilateral is found or OpenCV is unavailable — callers fall back to the
+ * upright and de-skewed, occupying the central (1 − 2·CARD_ZONE_MARGIN) region so it
+ * lines up exactly with cardZoneForFrame()'s zone for OCR + hashing. Returns null when
+ * no plausible card quadrilateral is found or OpenCV is unavailable — callers fall back to the
  * manual-align path.
  */
 export async function warpCardToCanonical(frame: HTMLCanvasElement): Promise<HTMLCanvasElement | null> {
@@ -203,10 +206,11 @@ function warpWithCv(cv: OpenCvApi, frame: HTMLCanvasElement): HTMLCanvasElement 
   }
 }
 
-/** The four canonical destination corners — the central 90% of OUT_W×OUT_H, so the
- *  warped card sits exactly where cardZoneForFrame(OUT_W/OUT_H) expects it. */
+/** The four canonical destination corners — the central (1 − 2·CARD_ZONE_MARGIN)
+ *  of OUT_W×OUT_H, so the warped card sits exactly where cardZoneForFrame(OUT_W/OUT_H)
+ *  expects it. Must use the same margin as cardZoneForFrame() in cardScanner.ts. */
 function canonicalDst(): { x: number; y: number }[] {
-  const m = 0.05;
+  const m = CARD_ZONE_MARGIN;
   return [
     { x: m * OUT_W, y: m * OUT_H },
     { x: (1 - m) * OUT_W, y: m * OUT_H },

@@ -47,12 +47,13 @@ const TESS_DIR = path.join(ROOT, 'public', 'tess');
 
 // The card zone is a true 5:7 MTG-card rectangle (cardZoneForFrame in
 // cardScanner.ts); its shape no longer depends on the camera aspect. Keep
-// CARD_ASPECT in sync with src/lib/ocr/cardScanner.ts.
+// CARD_ASPECT and CARD_ZONE_MARGIN in sync with src/lib/ocr/cardScanner.ts.
 const CARD_ASPECT = 2.5 / 3.5;
+const CARD_ZONE_MARGIN = 0.25; // framing-guide margin (see cardZoneForFrame)
 const BG = { r: 90, g: 85, b: 75 };
 
 /** Fit a centered 5:7 (CARD_ASPECT) box in pixel terms inside the frame — mirrors cardZoneForFrame(). */
-function cardBox(frameW, frameH, margin = 0.05) {
+function cardBox(frameW, frameH, margin = CARD_ZONE_MARGIN) {
   // Mirror cardZoneForFrame(): fit the CARD_ASPECT rectangle in *fraction* space
   // (fw/fh are fractions of frame width/height), then scale to pixels. Computing
   // fw from a pixel-valued fh is wrong — the relation fw=(CARD_ASPECT/aspect)*fh

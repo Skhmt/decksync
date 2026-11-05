@@ -29,6 +29,8 @@ const limitArg = process.argv.find(a => a.startsWith('--limit='));
 const LIMIT = limitArg ? parseInt(limitArg.split('=')[1], 10) : 10;
 
 const CARD_ASPECT = 2.5 / 3.5;
+// Keep in sync with CARD_ZONE_MARGIN in src/lib/ocr/cardScanner.ts (the framing-guide margin).
+const CARD_ZONE_MARGIN = 0.25;
 const FRAME_W = 1024;
 const FRAME_H = 768;
 const BG = { r: 90, g: 85, b: 75 };
@@ -50,7 +52,7 @@ function loadStoredHashes() {
 
 async function simulateRuntimeHash(cardImg, fill, angleDeg) {
   const meta = await sharp(cardImg).metadata();
-  const margin = 0.05;
+  const margin = CARD_ZONE_MARGIN; // mirrors cardZoneForFrame() in src/lib/ocr/cardScanner.ts
   const availW = (1 - 2 * margin) * FRAME_W;
   const availH = (1 - 2 * margin) * FRAME_H;
   let zoneW, zoneH;
