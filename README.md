@@ -8,7 +8,7 @@ It's a static single page application that can be installed as a progressive web
 
 ## To-do
 
-- Add a modal where you can tap a card and quickly get oracle text (maybe? feels like scope creep)
+- Feature: a different mode that lets you use the camera to build a deck list from a physical stack of cards that you can then import into archidekt/moxfield/etc.
 
 ## Development
 
