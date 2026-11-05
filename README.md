@@ -4,8 +4,6 @@ Maybe you're a judge and want to validate someone's deck? Maybe you're someone w
 
 It's a static single page application that can be installed as a progressive web app. Built in Svelte/DaisyUI/Vite.
 
-*This is **NOT** a deck builder.*
-
 ## To-do
 
 - Feature: a different mode that lets you use the camera to build a deck list from a physical stack of cards that you can then import into archidekt/moxfield/etc.
