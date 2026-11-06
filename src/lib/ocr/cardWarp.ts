@@ -102,14 +102,31 @@ function loadOpenCv(): Promise<OpenCvApi> {
  *  some builds expose the ready object directly, others via onRuntimeInitialized. */
 async function resolveCv(mod: any): Promise<OpenCvApi> {
   let api = mod;
-  if (typeof api === 'function') api = await api(); // v5 async module factory
+  // v5 may hand us a Promise (ESM import) — await it first.
+  if (api && typeof api.then === 'function') api = await api;
+  // Some builds expose an async module factory as the global. Call it once to
+  // obtain the real module, but guard so a non-factory value is left untouched.
+  if (!api?.Mat && typeof api === 'function') {
+    try {
+      const called = await api();
+      api = called && typeof called.then === 'function' ? await called : called ?? api;
+    } catch {
+      /* not a callable factory — keep the original value */
+    }
+  }
+  // The module may still be bootstrapping its wasm runtime.
   if (!api?.Mat && typeof api?.onRuntimeInitialized === 'function') {
     await new Promise<void>((res, rej) => {
       const t = setTimeout(() => rej(new Error('OpenCV init timed out')), 30000);
       api.onRuntimeInitialized = () => { clearTimeout(t); res(); };
     });
   }
-  if (!api?.Mat) throw new Error('OpenCV failed to initialize (no Mat on resolved module)');
+  if (!api?.Mat) {
+    throw new Error(
+      'OpenCV failed to initialize (no Mat on resolved module; type=' + typeof api +
+        ', keys=' + Object.keys(api || {}).slice(0, 25).join(',') + ')'
+    );
+  }
   return api as OpenCvApi;
 }
 /**
