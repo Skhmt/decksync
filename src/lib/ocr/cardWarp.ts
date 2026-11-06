@@ -32,8 +32,7 @@ const MIN_AREA_FRAC = 0.08;
 // Acceptable width/height range for the detected quad (tolerates tilt + perspective).
 const ASPECT_MIN = 0.5;
 const ASPECT_MAX = 0.95;
-// approxPolyDP simplification relative to contour perimeter; Canny thresholds.
-const APPROX_EPS = 0.02;
+// Canny edge-detection thresholds.
 const CANNY_LOW = 60;
 const CANNY_HIGH = 160;
 
@@ -46,11 +45,10 @@ interface OpenCvApi {
   Size: new (w: number, h: number) => any;
   MatVector: new () => any;
   matFromArray(rows: number, cols: number, type: number, data: any): any;
-  findContours(image: any, hierarchy: any, contours: any, mode: number, method: number): void;
+  findContours(image: any, contours: any, hierarchy: any, mode: number, method: number): void;
   contourArea(contour: any): number;
-  arcLength(curve: any, closed: boolean, isMeasure: boolean): number;
-  approxPolyDP(curve: any, epsilon: number, closed: boolean): any;
-  minAreaRect(points: any): { points(): any };
+  minAreaRect(points: any): any;
+  boxPoints(rect: any): any;
   getPerspectiveTransform(src: any, dst: any): any;
   warpPerspective(src: any, dst: any, M: any, dsize: any, flags?: number, borderMode?: number): void;
   cvtColor(src: any, dst: any, code: number): void;
@@ -170,14 +168,16 @@ function warpWithCv(cv: OpenCvApi, frame: HTMLCanvasElement): HTMLCanvasElement 
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
     const edges = track(new cv.Mat());
     cv.Canny(blurred, edges, CANNY_LOW, CANNY_HIGH);
-    const kernel = track(new cv.Mat(3, 3, cv.CV_8UC1, new Uint8Array([1, 1, 1, 1, 1, 1, 1, 1, 1])));
+    const kernel = track(matFromU8(cv, 3, 3, cv.CV_8UC1, new Uint8Array([1, 1, 1, 1, 1, 1, 1, 1, 1])));
     const closedEdges = track(new cv.Mat());
     cv.dilate(edges, closedEdges, kernel);
 
-    // findContours mutates its input — pass the edge map we're done with.
+    // findContours mutates its input — pass the edge map we're done with. NOTE: this
+    // OpenCV.js build uses the C++ arg order (contours before hierarchy), not the
+    // older JS order — swapping them throws "Expected null or instance of MatVector".
     const contours = track(new cv.MatVector());
     const hierarchy = track(new cv.Mat());
-    cv.findContours(closedEdges, hierarchy, contours, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    cv.findContours(closedEdges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     // --- 2. Largest contour that covers enough of the frame. ----------------
     let bestIdx = -1;
@@ -192,9 +192,11 @@ function warpWithCv(cv: OpenCvApi, frame: HTMLCanvasElement): HTMLCanvasElement 
     const best = track(contours.get(bestIdx));
 
     // --- 3. Reduce the contour to a quadrilateral. --------------------------
-    const approx = track(cv.approxPolyDP(best, APPROX_EPS * cv.arcLength(best, true, true), true));
-    let corners: { x: number; y: number }[] | null =
-      approx.rows === 4 ? readPoints2f(approx) : readPoints2f(cv.minAreaRect(best).points());
+    // Cards are rectangular, so the minimum-area enclosing rectangle is the best
+    // corner estimate. In this OpenCV.js build approxPolyDP's binding is unreliable
+    // (the epsilon lands in a Mat slot) and minAreaRect's RotatedRect exposes no
+    // .points() — but cv.boxPoints(rotatedRect) returns a plain {x,y}[] directly.
+    const corners = readBoxPoints(cv.boxPoints(cv.minAreaRect(best)));
     if (!corners || corners.length !== 4) return null;
 
     // --- 4. Order (TL, TR, BR, BL) and validate the shape. ------------------
@@ -256,14 +258,18 @@ function dist(a: { x: number; y: number }, b: { x: number; y: number }): number 
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-/** Reads an OpenCV point-set Mat (MatOfPoint2f or CV_32SC2 contour) into plain points. */
-function readPoints2f(m: any): { x: number; y: number }[] | null {
-  const rows = m?.rows;
-  if (!rows || rows <= 0) return null;
-  const arr = m.data32F ?? m.data32S;
-  if (!arr || arr.length < rows * 2) return null;
+/** Reads cv.boxPoints(rotatedRect) into plain {x,y} points. In this OpenCV.js build
+ *  boxPoints returns a plain array of 4 point objects (not a Mat). */
+function readBoxPoints(bp: any): { x: number; y: number }[] | null {
+  if (!Array.isArray(bp) || bp.length !== 4) return null;
   const pts: { x: number; y: number }[] = [];
-  for (let i = 0; i < rows; i++) pts.push({ x: arr[i * 2], y: arr[i * 2 + 1] });
+  for (let i = 0; i < 4; i++) {
+    const p = bp[i];
+    const x = typeof p?.x === 'number' ? p.x : Number(p?.[0]);
+    const y = typeof p?.y === 'number' ? p.y : Number(p?.[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    pts.push({ x, y });
+  }
   return pts;
 }
 
@@ -283,12 +289,20 @@ function frameToWork(frame: HTMLCanvasElement, workW: number, workH: number): HT
   return c;
 }
 
+/** Allocates an empty Mat and copies `u8` in via the `.data` view. The direct
+ *  `new cv.Mat(rows, cols, type, buffer)` form mis-routes the pixel/kernel buffer to
+ *  the Scalar overload in this OpenCV.js build ("Incorrect number of tuple elements
+ *  for Scalar"), so we always construct empty and copy the bytes in instead. */
+function matFromU8(cv: OpenCvApi, rows: number, cols: number, type: number, u8: Uint8Array): any {
+  const m = new cv.Mat(rows, cols, type);
+  m.data.set(u8);
+  return m;
+}
+
 /** Wraps a canvas's RGBA pixels in an OpenCV CV_8UC4 Mat. */
 function rgbaFromCanvas(cv: OpenCvApi, canvas: HTMLCanvasElement): any {
   const img = canvas.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, canvas.width, canvas.height);
-  const u8 = new Uint8Array(img.data.length);
-  u8.set(img.data);
-  return new cv.Mat(canvas.height, canvas.width, cv.CV_8UC4, u8);
+  return matFromU8(cv, canvas.height, canvas.width, cv.CV_8UC4, new Uint8Array(img.data));
 }
 
 /** Writes a CV_8UC4 Mat's pixels back into a canvas. */
