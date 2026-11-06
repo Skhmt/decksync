@@ -233,6 +233,7 @@ export class ScannerState {
       this.format = session.format || 'commander';
       this.deckName = session.name || 'My Scanned Deck';
       this.cards = session.cards;
+      console.info(`[DeckSync] scanner restore: ${session.cards.length} card(s) loaded from IndexedDB`);
       return true;
     } catch (e) {
       console.warn('Failed to restore scanned deck:', e);
