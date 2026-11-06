@@ -5,8 +5,8 @@ import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: '/decksync/',
-  // base: '.',
+  // base: '/decksync/',
+  base: '.',
   plugins: [
     svelte(),
     tailwindcss(),
