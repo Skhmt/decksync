@@ -214,10 +214,9 @@ export class ScannerState {
       id: ACTIVE_SESSION_ID,
       name: this.deckName,
       format: this.format,
-      // Svelte 5 $state arrays are Proxies — IndexedDB's structured clone
-      // algorithm can't serialize them, so we make a plain deep copy.
-      // cards: JSON.parse(JSON.stringify(this.cards)),
-      cards: structuredClone(this.cards),
+      // Svelte 5 $state arrays are Proxies — both IndexedDB and structuredClone
+      // reject them, so we round-trip through JSON to get plain objects.
+      cards: JSON.parse(JSON.stringify(this.cards)),
       updatedAt: Date.now()
     };
 
