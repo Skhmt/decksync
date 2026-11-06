@@ -42,6 +42,13 @@
     await deckStore.restoreSession();
     await scannerStore.restoreSession();
   });
+
+  function handleClearScan() {
+    if (scannerStore.cards.length === 0) return;
+    if (confirm('Are you sure you want to clear all scanned cards? This cannot be undone.')) {
+      void scannerStore.clearAll();
+    }
+  }
 </script>
 
 <div class="min-h-dvh flex flex-col bg-base-300 text-base-content">
@@ -139,11 +146,20 @@
           <span class="font-semibold">{scannerStore.totalCards} cards</span>
           <span class="text-base-content/40">|</span>
           <span>{scannerStore.uniqueCardCount} unique</span>
-          {#if scannerStore.bannedCards.length > 0}
-            <button onclick={() => isBannedOpen = true} class="badge badge-error badge-xs font-bold ml-auto">
-              {scannerStore.bannedCards.length} banned
+          <div class="ml-auto flex items-center gap-2">
+            {#if scannerStore.bannedCards.length > 0}
+              <button onclick={() => isBannedOpen = true} class="badge badge-error badge-xs font-bold">
+                {scannerStore.bannedCards.length} banned
+              </button>
+            {/if}
+            <button
+              onclick={handleClearScan}
+              class="btn btn-ghost btn-xs gap-1 text-error hover:bg-error/10"
+              title="Clear all scanned cards"
+            >
+              Clear
             </button>
-          {/if}
+          </div>
         </div>
       </div>
     {/if}

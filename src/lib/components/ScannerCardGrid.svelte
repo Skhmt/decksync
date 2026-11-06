@@ -1,10 +1,48 @@
 <script lang="ts">
   import { scannerStore } from "../state/scanner.svelte";
   import ScannerCardItem from "./ScannerCardItem.svelte";
-  import { questionCircleIconSvg } from "../icons";
+  import ScannerCardListRow from "./ScannerCardListRow.svelte";
+  import { questionCircleIconSvg, sortAZIconSvg, gridIconSvg, listIconSvg } from "../icons";
 </script>
 
-<div class="space-y-8 pb-16">
+<div class="space-y-6 pb-16">
+  <!-- Toolbar: sort + view toggles (mirrors the Deck Sync FilterBar) -->
+  <div class="flex items-center justify-between gap-2 sm:gap-3 -mb-1">
+    <span class="text-xs text-base-content/60">
+      {scannerStore.displayedCards.length} card{scannerStore.displayedCards.length === 1 ? "" : "s"}
+    </span>
+    <div class="flex items-center gap-1.5 sm:gap-2">
+      <!-- Group By Type vs Flat Alphabetical Toggle -->
+      <button
+        onclick={() => scannerStore.groupByType = !scannerStore.groupByType}
+        class="btn btn-sm {scannerStore.groupByType ? 'btn-neutral' : 'btn-outline'} gap-1 px-2 sm:px-3 shrink-0"
+        title={scannerStore.groupByType ? 'Grouped by card type, then alphabetical' : 'Flat alphabetical list (ignoring type)'}
+      >
+        <span class="w-3.5 h-3.5 shrink-0">{@html sortAZIconSvg}</span>
+        <span class="hidden sm:inline">{scannerStore.groupByType ? 'By Type' : 'Flat A-Z'}</span>
+      </button>
+
+      <!-- View Switcher (Grid vs List) -->
+      <div class="join bg-base-100 rounded-lg border border-base-300 shrink-0">
+        <button
+          onclick={() => scannerStore.viewMode = 'grid'}
+          class="join-item btn btn-sm px-2.5 {scannerStore.viewMode === 'grid' ? 'btn-neutral' : 'btn-ghost'}"
+          title="Visual card grid view"
+          aria-label="Grid view"
+        >
+          <span class="w-4 h-4 shrink-0">{@html gridIconSvg}</span>
+        </button>
+        <button
+          onclick={() => scannerStore.viewMode = 'list'}
+          class="join-item btn btn-sm px-2.5 {scannerStore.viewMode === 'list' ? 'btn-neutral' : 'btn-ghost'}"
+          title="Text-based list view"
+          aria-label="List view"
+        >
+          <span class="w-4 h-4 shrink-0">{@html listIconSvg}</span>
+        </button>
+      </div>
+    </div>
+  </div>
   {#if scannerStore.displayedGroups.length === 0 || scannerStore.displayedCards.length === 0}
     <div class="text-center py-16 px-4 bg-base-200/50 rounded-2xl border border-dashed border-base-300">
       <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-base-300 flex items-center justify-center text-base-content/40">
@@ -30,11 +68,19 @@
             </div>
           {/if}
 
+          {#if scannerStore.viewMode === 'grid'}
           <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
             {#each group.cards as card (card.id)}
               <ScannerCardItem {card} />
             {/each}
           </div>
+          {:else}
+            <div class="bg-base-100 rounded-xl border border-base-300 overflow-hidden divide-y divide-base-200 shadow-xs">
+              {#each group.cards as card (card.id)}
+                <ScannerCardListRow {card} />
+              {/each}
+            </div>
+          {/if}
         </section>
       {/if}
     {/each}

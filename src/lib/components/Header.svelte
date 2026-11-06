@@ -165,7 +165,7 @@
             disabled={scannerStore.cards.length === 0}
             title="Export scanned deck"
           >
-            <span class="hidden sm:inline">Export</span>
+            <span>Export</span>
           </button>
         {/if}
       </div>

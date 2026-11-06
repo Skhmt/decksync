@@ -1,5 +1,7 @@
 import { type MTGFormat, type ScannedDeckCard, type SavedScannedDeck, type ScryfallCard } from '../types';
-import { saveScannedDeck, getLatestScannedDeck } from '../storage/db';
+import { saveScannedDeck, getLatestScannedDeck, deleteScannedDeck } from '../storage/db';
+
+const ACTIVE_SESSION_ID = 'active_scanner_session';
 import { getCardPrimaryType, CARD_TYPE_ORDER } from '../api/scryfall';
 
 /**
@@ -193,10 +195,14 @@ export class ScannerState {
     }
   }
 
-  /** Clear all cards from the scanned deck */
-  clearAll(): void {
+  /** Clear all cards from the scanned deck and remove any persisted session */
+  async clearAll(): Promise<void> {
     this.cards = [];
-    this.persistSession();
+    try {
+      await deleteScannedDeck(ACTIVE_SESSION_ID);
+    } catch (e) {
+      console.warn('Failed to clear persisted scanned deck:', e);
+    }
   }
 
   // --- Persistence ---
@@ -205,7 +211,7 @@ export class ScannerState {
     if (this.cards.length === 0) return;
 
     const session: SavedScannedDeck = {
-      id: 'active_scanner_session',
+      id: ACTIVE_SESSION_ID,
       name: this.deckName,
       format: this.format,
       cards: this.cards,
