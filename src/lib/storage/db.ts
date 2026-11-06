@@ -1,7 +1,7 @@
-import type { DeckVerificationLog, SavedDeckSession, ScryfallCard } from '../types';
+import type { DeckVerificationLog, SavedDeckSession, ScryfallCard, SavedScannedDeck } from '../types';
 
 const DB_NAME = 'decksync_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 interface CachedCardEntry {
   name: string;
@@ -41,6 +41,12 @@ function getDB(): Promise<IDBDatabase> {
       // Card cache store: to cache Scryfall card data
       if (!db.objectStoreNames.contains('cardCache')) {
         db.createObjectStore('cardCache', { keyPath: 'name' });
+      }
+
+      // Scanned decks store: for deck scanner mode sessions
+      if (!db.objectStoreNames.contains('scannedDecks')) {
+        const scannedStore = db.createObjectStore('scannedDecks', { keyPath: 'id' });
+        scannedStore.createIndex('updatedAt', 'updatedAt', { unique: false });
       }
     };
 
@@ -228,6 +234,57 @@ export async function getCachedCardById(scryfallId: string): Promise<ScryfallCar
   } catch {
     return null;
   }
+}
+
+// --- Scanned Decks (Deck Scanner mode) ---
+
+export async function saveScannedDeck(deck: SavedScannedDeck): Promise<void> {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('scannedDecks', 'readwrite');
+    const store = tx.objectStore('scannedDecks');
+    const req = store.put(deck);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function getLatestScannedDeck(): Promise<SavedScannedDeck | null> {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('scannedDecks', 'readonly');
+    const store = tx.objectStore('scannedDecks');
+    const index = store.index('updatedAt');
+    const req = index.openCursor(null, 'prev');
+
+    req.onsuccess = () => {
+      const cursor = req.result;
+      resolve(cursor ? (cursor.value as SavedScannedDeck) : null);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteScannedDeck(id: string): Promise<void> {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('scannedDecks', 'readwrite');
+    const store = tx.objectStore('scannedDecks');
+    const req = store.delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function clearScannedDecks(): Promise<void> {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('scannedDecks', 'readwrite');
+    const store = tx.objectStore('scannedDecks');
+    const req = store.clear();
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
 }
 
 

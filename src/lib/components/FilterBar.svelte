@@ -1,16 +1,26 @@
 <script lang="ts">
   import { deckStore } from '../state/deck.svelte';
-  import { cameraIconSvg, ellipsisIconSvg, gridIconSvg, listIconSvg, sortAZIconSvg } from '../icons';
+  import { ellipsisIconSvg, gridIconSvg, listIconSvg, sortAZIconSvg, saveLogIconSvg, clockIconSvg } from '../icons';
 
   let {
     headerHeight = 60,
     filterHeight = $bindable(56),
-    onOpenScan,
+    onOpenHistory = () => {},
   }: {
     headerHeight?: number;
     filterHeight?: number;
-    onOpenScan?: () => void;
+    onOpenHistory?: () => void;
   } = $props();
+
+  let isLoggingSuccess = $state(false);
+
+  async function handleLogVerification() {
+    await deckStore.logVerification();
+    isLoggingSuccess = true;
+    setTimeout(() => {
+      isLoggingSuccess = false;
+    }, 2500);
+  }
 
   const filterOptions: { id: 'all' | 'not_found' | 'found'; label: string; shortLabel: string; count?: number }[] = $derived([
     { id: 'all', label: 'Full Deck', shortLabel: 'All', count: deckStore.totalExpectedCards },
@@ -45,19 +55,6 @@
 
     <!-- Search + Grouping + View Layout Toggles -->
     <div class="flex items-center justify-between md:justify-end gap-1.5 sm:gap-2 w-full md:w-auto">
-      <!-- Camera Card Scan (left of the filter box) -->
-      {#if onOpenScan}
-        <button
-          onclick={onOpenScan}
-          class="btn btn-sm btn-outline gap-1 px-2 sm:px-3 shrink-0"
-          title="Point your camera at a card to find and verify it"
-          aria-label="Scan card with camera"
-        >
-          <span class="w-4 h-4 shrink-0">{@html cameraIconSvg}</span>
-          <span class="hidden lg:inline">Scan</span>
-        </button>
-      {/if}
-
       <!-- Search Input -->
       <div class="relative flex-1 sm:w-48 md:w-56">
         <input
@@ -122,6 +119,21 @@
           <li>
             <button onclick={() => deckStore.uncheckAll()} class="text-xs text-error">
               ✕ Clear Checklist
+            </button>
+          </li>
+          <li class="menu-divider"></li>
+          <li>
+            <button onclick={handleLogVerification} class="text-xs" disabled={isLoggingSuccess}>
+              {#if isLoggingSuccess}
+                <span class="text-success font-bold">✓ Saved!</span>
+              {:else}
+                <span class="inline-block w-3.5 h-3.5 mr-1 align-text-bottom">{@html saveLogIconSvg}</span>Save Log
+              {/if}
+            </button>
+          </li>
+          <li>
+            <button onclick={onOpenHistory} class="text-xs">
+              <span class="inline-block w-3.5 h-3.5 mr-1 align-text-bottom">{@html clockIconSvg}</span>History
             </button>
           </li>
         </ul>

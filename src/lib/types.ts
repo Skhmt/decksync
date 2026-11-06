@@ -125,3 +125,24 @@ export interface CardScanOutcome {
   error?: string;
 }
 
+// --- Deck Scanner types ---
+
+/** A card in the scanned (collected) deck */
+export interface ScannedDeckCard {
+  id: string;              // stable unique id (scryfall id or name-based)
+  name: string;
+  count: number;           // how many copies found via scanning
+  scryfall?: ScryfallCard; // enriched card data
+  setCode?: string;        // specific printing scanned (from OCR)
+  collectorNumber?: string;
+}
+
+/** Persisted scanned deck session */
+export interface SavedScannedDeck {
+  id: string;
+  name: string;
+  format: MTGFormat;
+  cards: ScannedDeckCard[];
+  updatedAt: number;
+}
+

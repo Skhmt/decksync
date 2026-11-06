@@ -27,7 +27,17 @@
     xmarkIconSvg,
   } from "../icons";
 
-  let { isOpen, onClose }: { isOpen: boolean; onClose: () => void } = $props();
+  let {
+    isOpen,
+    onClose,
+    mode = "verify",
+    onCardAdded
+  }: {
+    isOpen: boolean;
+    onClose: () => void;
+    mode?: "verify" | "collect";
+    onCardAdded?: (card: ScryfallCard) => void;
+  } = $props();
 
   type Phase = "starting" | "live" | "camera_error";
 
@@ -286,9 +296,10 @@
     // A confirmation is already up for this exact card — keep showing it
     if (pendingHit?.key === key) return;
 
-    // A different card was found: replace the pending confirmation (if any),
-    // which dismisses the previous modal automatically.
-    const deckCard = matchDeckCard(deckStore.cards, card) ?? null;
+    // In collect mode, every card is "addable" — use a synthetic deckCard flag
+    const deckCard = mode === "collect"
+      ? null
+      : (matchDeckCard(deckStore.cards, card) ?? null);
     pendingHit = { key, card, deckCard, method };
     startAutoAction();
     buzz(80);
@@ -297,8 +308,16 @@
   /** User confirmed the capture: mark one copy as found (undoable via toast). */
   function confirmPendingHit() {
     const hit = pendingHit;
-    if (!hit?.deckCard) return;
-    deckStore.recordCameraScan(hit.deckCard.id);
+    if (!hit) return;
+
+    if (mode === "collect") {
+      // In collect mode, call the onCardAdded callback
+      onCardAdded?.(hit.card);
+    } else {
+      if (!hit.deckCard) return;
+      deckStore.recordCameraScan(hit.deckCard.id);
+    }
+
     dismissPendingHit(hit.key);
     buzz(120);
   }
@@ -350,8 +369,14 @@
   function runAutoAction() {
     const hit = pendingHit;
     if (!hit) return;
-    if (hit.deckCard) confirmPendingHit();
-    else declinePendingHit();
+    // In collect mode, always auto-add (any card is valid)
+    if (mode === "collect") {
+      confirmPendingHit();
+    } else if (hit.deckCard) {
+      confirmPendingHit();
+    } else {
+      declinePendingHit();
+    }
   }
 
   function buzz(pattern: number | number[]) {
@@ -596,7 +621,14 @@
                   </div>
                 </div>
 
-                {#if pendingHit.deckCard}
+                {#if mode === "collect"}
+                  <div
+                    class="mt-2.5 flex items-center gap-2 text-xs bg-success/10 border border-success/30 text-success rounded-lg px-2.5 py-1.5"
+                  >
+                    <span class="w-3.5 h-3.5 shrink-0">{@html checkIconSvg}</span>
+                    Adding to your scanned deck
+                  </div>
+                {:else if pendingHit.deckCard}
                   {#if pendingHit.deckCard.verifiedCount >= pendingHit.deckCard.targetCount}
                     <div
                       class="mt-2.5 flex items-center gap-2 text-xs bg-warning/15 border border-warning/40 text-warning rounded-lg px-2.5 py-1.5"
@@ -631,10 +663,10 @@
                 {/if}
 
                 <div class="mt-3 flex gap-2">
-                  {#if pendingHit.deckCard}
+                  {#if mode === "collect" || pendingHit.deckCard}
                     <button
                       onclick={confirmPendingHit}
-                      title="Mark one copy as found"
+                      title={mode === "collect" ? "Add to scanned deck" : "Mark one copy as found"}
                       class="btn btn-primary btn-sm flex-1 gap-1.5"
                     >
                       <span class="w-3.5 h-3.5 shrink-0"
@@ -657,15 +689,17 @@
                 <!-- Countdown: resolves the prompt automatically after a few seconds -->
                 <div class="mt-3">
                   <p class="mb-1 text-[10px] text-base-content/50">
-                    {pendingHit.deckCard
+                    {mode === "collect"
                       ? "Adding automatically…"
-                      : "Dismissing automatically…"}
+                      : pendingHit.deckCard
+                        ? "Adding automatically…"
+                        : "Dismissing automatically…"}
                   </p>
                   <div
                     class="h-1.5 w-full overflow-hidden rounded-full bg-base-200"
                   >
                     <div
-                      class="h-full rounded-full {pendingHit.deckCard
+                      class="h-full rounded-full {mode === 'collect' || pendingHit.deckCard
                         ? 'bg-success'
                         : 'bg-warning'}"
                       style="width: {autoProgress * 100}%"
