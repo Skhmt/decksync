@@ -135,6 +135,25 @@
     };
   });
 
+  // Back-button / PWA navigation: pushing a history entry when the camera opens
+  // lets us intercept the browser's back gesture and close the modal instead of
+  // navigating the user out of the app.
+  $effect(() => {
+    if (!isOpen) return;
+
+    history.pushState({ scannerOpen: true }, "");
+
+    function onPopState() {
+      handleClose();
+    }
+
+    window.addEventListener("popstate", onPopState);
+
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+    };
+  });
+
   // Re-attach a running stream whenever the <video> element or the stream changes.
   // The video stays mounted while the modal is open, so after a Retry produces a
   // fresh stream this wires it up (and plays) without remounting the element.
