@@ -36,7 +36,7 @@
     isOpen: boolean;
     onClose: () => void;
     mode?: "verify" | "collect";
-    onCardAdded?: (card: ScryfallCard, setCode?: string, collectorNumber?: string) => void;
+    onCardAdded?: (card: ScryfallCard, setCode?: string, collectorNumber?: string, source?: 'hash' | 'collector' | 'name') => void;
   } = $props();
 
   type Phase = "starting" | "live" | "camera_error";
@@ -332,9 +332,10 @@
     if (!hit) return;
 
     if (mode === "collect") {
-      // In collect mode, pass the scanned printing's set/collector info through
-      // so the scanner can record which physical card was captured.
-      onCardAdded?.(hit.card, hit.card.set, hit.card.collector_number);
+      // In collect mode, pass the scanned printing's set/collector info through so
+      // the scanner can record which physical card was captured, plus how it was
+      // identified (hash/collector = reliable printing; name = not).
+      onCardAdded?.(hit.card, hit.card.set, hit.card.collector_number, hit.method);
     } else {
       if (!hit.deckCard) return;
       deckStore.recordCameraScan(hit.deckCard.id);

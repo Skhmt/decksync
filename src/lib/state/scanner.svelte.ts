@@ -152,7 +152,12 @@ export class ScannerState {
   // --- Actions ---
 
   /** Add a card (or increment its count) to the scanned deck */
-  addCard(card: ScryfallCard, setCode?: string, collectorNumber?: string): void {
+  addCard(
+    card: ScryfallCard,
+    setCode?: string,
+    collectorNumber?: string,
+    source?: 'hash' | 'collector' | 'name'
+  ): void {
     // Key by normalized name so different printings of the same card merge into
     // one entry — otherwise scanning e.g. two different Counterspell sets would
     // create two separate count-1 entries and bypass singleton copy limits.
@@ -161,8 +166,16 @@ export class ScannerState {
 
     if (existing) {
       existing.count += 1;
-      if (setCode) existing.setCode = setCode;
-      if (collectorNumber) existing.collectorNumber = collectorNumber;
+      // Only trust printing metadata from reliable detections (image hash or
+      // collector-info OCR). A name-only hit maps to an *arbitrary* Scryfall
+      // printing, so it must never clobber a real printing we already captured
+      // or downgrade the source — otherwise a later name fallback would hide
+      // collector info we legitimately have.
+      if (source && source !== 'name') {
+        existing.printingSource = source;
+        if (setCode) existing.setCode = setCode;
+        if (collectorNumber) existing.collectorNumber = collectorNumber;
+      }
     } else {
       this.cards.push({
         id: nameKey,
@@ -170,7 +183,8 @@ export class ScannerState {
         count: 1,
         scryfall: card,
         setCode,
-        collectorNumber
+        collectorNumber,
+        printingSource: source
       });
     }
 
@@ -257,24 +271,27 @@ export class ScannerState {
 
   // --- Export ---
 
-  /** Generate a plain-text decklist for pasting into Archidekt, Moxfield, etc. */
-  generateExportText(): string {
+  /**
+   * Generate a plain-text decklist for pasting into Archidekt, Moxfield, etc.
+   * When `includeCollectorInfo` is set, cards whose physical printing was detected
+   * via image hash or collector-info OCR get a `(SET) number` suffix, e.g.
+   * `1 War Room (SOC) 422`. Cards identified by name only are left plain, since a
+   * name lookup does not tell us which printing the user actually has.
+   */
+  generateExportText(includeCollectorInfo = false): string {
     const sorted = [...this.cards].sort((a, b) => a.name.localeCompare(b.name));
-    return sorted.map(c => `${c.count} ${c.name}`).join('\n');
-  }
-
-  /** Generate an Archidekt deep-link URL with the decklist */
-  generateArchidektUrl(): string {
-    const list = this.generateExportText();
-    const encoded = encodeURIComponent(list);
-    return `https://archidekt.com/deck/create?list=${encoded}`;
-  }
-
-  /** Generate a Moxfield import URL (uses the same plain-text format) */
-  generateMoxfieldUrl(): string {
-    const list = this.generateExportText();
-    const encoded = encodeURIComponent(list);
-    return `https://www.moxfield.com/deck/create?decklist=${encoded}`;
+    return sorted.map(c => {
+      let line = `${c.count} ${c.name}`;
+      if (
+        includeCollectorInfo &&
+        c.setCode &&
+        c.collectorNumber &&
+        (c.printingSource === 'hash' || c.printingSource === 'collector')
+      ) {
+        line += ` (${c.setCode.toUpperCase()}) ${c.collectorNumber}`;
+      }
+      return line;
+    }).join('\n');
   }
 }
 

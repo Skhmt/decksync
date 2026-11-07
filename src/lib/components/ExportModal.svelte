@@ -4,32 +4,30 @@
   let { isOpen, onClose }: { isOpen: boolean; onClose: () => void } = $props();
 
   let copied = $state(false);
+  // When on, append `(SET) number` for cards whose physical printing was detected
+  // via image hash or collector-info OCR. Name-only lookups don't reveal the actual
+  // printing in hand, so those cards stay plain regardless of this toggle.
+  let includeCollectorInfo = $state(false);
+
+  function getExportText(): string {
+    return scannerStore.generateExportText(includeCollectorInfo);
+  }
 
   function handleCopy() {
-    const text = scannerStore.generateExportText();
-    navigator.clipboard.writeText(text).then(() => {
+    navigator.clipboard.writeText(getExportText()).then(() => {
       copied = true;
       setTimeout(() => (copied = false), 2000);
     });
   }
 
   function handleDownload() {
-    const text = scannerStore.generateExportText();
-    const blob = new Blob([text], { type: "text/plain" });
+    const blob = new Blob([getExportText()], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `${scannerStore.deckName.replace(/\s+/g, "_")}.txt`;
     a.click();
     URL.revokeObjectURL(url);
-  }
-
-  function handleArchidekt() {
-    window.open(scannerStore.generateArchidektUrl(), "_blank");
-  }
-
-  function handleMoxfield() {
-    window.open(scannerStore.generateMoxfieldUrl(), "_blank");
   }
 </script>
 
@@ -59,8 +57,16 @@
 
       <!-- Preview -->
       <div class="bg-base-200 rounded-xl p-3 max-h-48 overflow-y-auto font-mono text-xs leading-relaxed whitespace-pre-wrap">
-        {scannerStore.generateExportText()}
+        {getExportText()}
       </div>
+
+      <!-- Collector info toggle -->
+      <label class="flex items-start gap-2 text-xs text-base-content/70 cursor-pointer select-none">
+        <input type="checkbox" bind:checked={includeCollectorInfo} class="checkbox checkbox-xs mt-0.5" />
+        <span>
+          Include set &amp; collector number where detected<br /><span class="font-mono">(e.g. War Room (SOC) 422)</span>
+        </span>
+      </label>
 
       <!-- Actions -->
       <div class="space-y-2">
@@ -68,17 +74,8 @@
           {copied ? "✓ Copied!" : "Copy to Clipboard"}
         </button>
 
-        <div class="grid grid-cols-2 gap-2">
-          <button onclick={handleDownload} class="btn btn-outline btn-sm">
-            Download .txt
-          </button>
-          <button onclick={handleArchidekt} class="btn btn-outline btn-sm">
-            Archidekt
-          </button>
-        </div>
-
-        <button onclick={handleMoxfield} class="btn btn-outline btn-sm w-full">
-          Moxfield
+        <button onclick={handleDownload} class="btn btn-outline btn-sm w-full">
+          Download .txt
         </button>
       </div>
 

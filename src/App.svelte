@@ -223,7 +223,7 @@
     isOpen={isScanOpen}
     onClose={() => isScanOpen = false}
     mode={appMode === 'scan' ? 'collect' : 'verify'}
-    onCardAdded={(card, setCode, collectorNumber) => scannerStore.addCard(card, setCode, collectorNumber)}
+    onCardAdded={(card, setCode, collectorNumber, source) => scannerStore.addCard(card, setCode, collectorNumber, source)}
   />
 
   <!-- Bottom toast with undo when a card is verified or removed in the filtered views -->

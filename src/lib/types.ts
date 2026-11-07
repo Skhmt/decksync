@@ -135,6 +135,10 @@ export interface ScannedDeckCard {
   scryfall?: ScryfallCard; // enriched card data
   setCode?: string;        // specific printing scanned (from OCR)
   collectorNumber?: string;
+  /** How the physical printing was identified. Only 'hash' and 'collector' reflect
+   *  the actual card in hand — a 'name' lookup resolves to an arbitrary Scryfall
+   *  printing, so its set/collector data is not trustworthy for export. */
+  printingSource?: 'hash' | 'collector' | 'name';
 }
 
 /** Persisted scanned deck session */
