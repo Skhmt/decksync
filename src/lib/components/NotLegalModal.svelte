@@ -1,8 +1,21 @@
 <script lang="ts">
-  import { deckStore } from '../state/deck.svelte';
+  import type { MTGFormat, ScryfallCard } from '../types';
   import { calendarXmarkIconSvg } from '../icons';
 
-  let { isOpen, onClose }: { isOpen: boolean; onClose: () => void } = $props();
+  /** A card as shown in a warning modal — works for both deck and scanned cards. */
+  interface WarningCard {
+    name: string;
+    targetCount?: number;
+    count?: number;
+    scryfall?: ScryfallCard;
+  }
+
+  let { isOpen, onClose, cards = [], format }: {
+    isOpen: boolean;
+    onClose: () => void;
+    cards?: WarningCard[];
+    format: MTGFormat;
+  } = $props();
 </script>
 
 {#if isOpen}
@@ -21,7 +34,7 @@
           <div>
             <h3 class="font-bold text-lg text-base-content">Not Legal in This Format</h3>
             <p class="text-xs text-base-content/60">
-              Format: <span class="font-semibold text-base-content uppercase">{deckStore.format}</span>
+              Format: <span class="font-semibold text-base-content uppercase">{format}</span>
             </p>
           </div>
         </div>
@@ -36,11 +49,11 @@
 
       <div class="mt-4 space-y-2">
         <p class="text-xs text-base-content/70">
-          The following cards can't be played in {deckStore.format} according to official MTG format rules from Scryfall — typically because their set has rotated out of the format or the set isn't part of the format's pool:
+          The following cards can't be played in {format} according to official MTG format rules from Scryfall — typically because their set has rotated out of the format or the set isn't part of the format's pool:
         </p>
 
         <div class="space-y-1.5 max-h-72 overflow-y-auto mt-2">
-          {#each deckStore.notLegalCards as card}
+          {#each cards as card}
             <div class="flex items-center justify-between p-2.5 bg-error/10 border border-error/20 rounded-xl text-xs">
               <div class="min-w-0">
                 <span class="font-bold text-error">{card.name}</span>

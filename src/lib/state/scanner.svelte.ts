@@ -41,19 +41,28 @@ export class ScannerState {
   /** Count of game changer cards */
   gameChangerCount = $derived(this.gameChangerCards.length);
 
+  /** Cards that can't be played in the current format (Scryfall `not_legal`) */
+  notLegalCards = $derived(
+    this.cards.filter(c => c.scryfall?.legalities?.[this.format] === 'not_legal')
+  );
+
   /** Whether the current format is Commander/EDH */
   isCommander = $derived(this.format === 'commander');
 
-  /** Color identity derived from all scanned cards */
+  /** Color identity derived from all scanned cards (rules-text identity, WUBRG order) */
   colorIdentity = $derived.by(() => {
     const identitySet = new Set<string>();
     for (const card of this.cards) {
-      const colors = card.scryfall?.colors;
-      if (colors) {
-        for (const c of colors) identitySet.add(c);
+      // Use Scryfall's `color_identity` (rules text), not `colors` (card colors),
+      // so off-color commanders / artifacts like Bolas's Citadel are captured.
+      const identity = card.scryfall?.color_identity;
+      if (identity) {
+        for (const c of identity) identitySet.add(c);
       }
     }
-    return Array.from(identitySet).sort();
+    // MTG standard WUBRG order rather than alphabetical
+    const order = ['W', 'U', 'B', 'R', 'G'];
+    return order.filter((c) => identitySet.has(c));
   });
 
   /** Cards whose count exceeds the format's copy limit */
@@ -144,8 +153,11 @@ export class ScannerState {
 
   /** Add a card (or increment its count) to the scanned deck */
   addCard(card: ScryfallCard, setCode?: string, collectorNumber?: string): void {
-    const id = card.id || card.name.toLowerCase().replace(/\s+/g, '-');
-    const existing = this.cards.find(c => c.id === id);
+    // Key by normalized name so different printings of the same card merge into
+    // one entry — otherwise scanning e.g. two different Counterspell sets would
+    // create two separate count-1 entries and bypass singleton copy limits.
+    const nameKey = card.name.toLowerCase().trim();
+    const existing = this.cards.find(c => c.name.toLowerCase().trim() === nameKey);
 
     if (existing) {
       existing.count += 1;
@@ -153,7 +165,7 @@ export class ScannerState {
       if (collectorNumber) existing.collectorNumber = collectorNumber;
     } else {
       this.cards.push({
-        id,
+        id: nameKey,
         name: card.name,
         count: 1,
         scryfall: card,

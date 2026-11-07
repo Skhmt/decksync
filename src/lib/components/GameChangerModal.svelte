@@ -1,8 +1,23 @@
 <script lang="ts">
-  import { deckStore } from '../state/deck.svelte';
+  import type { MTGFormat, ScryfallCard } from '../types';
   import { boltIconSvg } from '../icons';
 
-  let { isOpen, onClose }: { isOpen: boolean; onClose: () => void } = $props();
+  /** A card as shown in a warning modal — works for both deck and scanned cards. */
+  interface WarningCard {
+    name: string;
+    targetCount?: number;
+    count?: number;
+    scryfall?: ScryfallCard;
+  }
+
+  let { isOpen, onClose, cards = [], format }: {
+    isOpen: boolean;
+    onClose: () => void;
+    cards?: WarningCard[];
+    format: MTGFormat;
+  } = $props();
+
+  const qty = (c: WarningCard) => c.targetCount ?? c.count ?? 1;
 </script>
 
 {#if isOpen}
@@ -21,7 +36,7 @@
           <div>
             <h3 class="font-bold text-lg text-base-content">Game Changers</h3>
             <p class="text-xs text-base-content/60">
-              Flagged by Scryfall for <span class="font-semibold text-base-content uppercase">{deckStore.format}</span>
+              Flagged by Scryfall for <span class="font-semibold text-base-content uppercase">{format}</span>
             </p>
           </div>
         </div>
@@ -40,14 +55,14 @@
         </p>
 
         <div class="space-y-1.5 max-h-72 overflow-y-auto mt-2">
-          {#each deckStore.gameChangerCards as card}
+          {#each cards as card}
             <div class="flex items-center justify-between p-2.5 bg-warning/10 border border-warning/20 rounded-xl text-xs">
               <div>
                 <span class="font-bold text-base-content">{card.name}</span>
                 <span class="text-base-content/60 ml-2">({card.scryfall?.type_line || 'Card'})</span>
               </div>
               <span class="badge badge-sm badge-warning font-mono">
-                {card.targetCount}x
+                {qty(card)}x
               </span>
             </div>
           {/each}

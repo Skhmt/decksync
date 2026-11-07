@@ -102,9 +102,43 @@ export const NAME_REGION: RegionSpec = { x0: 0.02, y0: 0.03, x1: 0.98, y1: 0.12,
 /** Bottom-left corner of modern cards: collector number line above the set-code line. */
 export const SET_REGION: RegionSpec = { x0: 0.0, y0: 0.77, x1: 0.60, y1: 1.0, targetHeight: 300 };
 
+// --- Canvas pooling ---------------------------------------------------------
+// Continuous scanning allocates a full-resolution frame canvas (~1920x1440,
+// ~11 MB) three times every ~700 ms. Reusing a small round-robin pool instead of
+// calling document.createElement on every frame avoids GC churn and thermal
+// throttle on mobile. The scan loop is strictly sequential (one burst at a time),
+// so a pool sized above the burst count is safe to reuse across attempts.
+const FRAME_POOL_SIZE = 6; // comfortably > BURST_FRAMES (3)
+const framePool: HTMLCanvasElement[] = [];
+let framePoolIdx = 0;
+
+function acquireFrameCanvas(): HTMLCanvasElement {
+  if (framePool.length < FRAME_POOL_SIZE) {
+    framePool.push(document.createElement('canvas'));
+  }
+  const canvas = framePool[framePoolIdx];
+  framePoolIdx = (framePoolIdx + 1) % FRAME_POOL_SIZE;
+  return canvas;
+}
+
+// Region crops are much smaller and are consumed by an awaited OCR call, so a
+// small pool is safe to reuse across the sequential set/name reads.
+const REGION_POOL_SIZE = 4;
+const regionPool: HTMLCanvasElement[] = [];
+let regionPoolIdx = 0;
+
+function acquireRegionCanvas(): HTMLCanvasElement {
+  if (regionPool.length < REGION_POOL_SIZE) {
+    regionPool.push(document.createElement('canvas'));
+  }
+  const canvas = regionPool[regionPoolIdx];
+  regionPoolIdx = (regionPoolIdx + 1) % REGION_POOL_SIZE;
+  return canvas;
+}
+
 /** Grabs the current camera frame as a full-resolution canvas. */
 export function captureFrame(video: HTMLVideoElement): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
+  const canvas = acquireFrameCanvas();
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
@@ -137,7 +171,7 @@ function preprocessRegion(frame: HTMLCanvasElement, region: RegionSpec): HTMLCan
   const w = Math.max(8, Math.round(sw * scale));
   const h = region.targetHeight;
 
-  const canvas = document.createElement('canvas');
+  const canvas = acquireRegionCanvas();
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;

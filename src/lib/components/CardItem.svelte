@@ -59,12 +59,12 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   role="button"
   tabindex="0"
   onclick={handleCardClick}
+  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCardClick(); } }}
   class="relative rounded-2xl overflow-hidden shadow-md group transition-all duration-200 cursor-pointer select-none border-2 active:scale-[0.98] {hasLegalityIssue
     ? 'border-error hover:shadow-xl hover:scale-[1.02]'
     : hasTooMany

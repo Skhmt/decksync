@@ -36,7 +36,7 @@
     isOpen: boolean;
     onClose: () => void;
     mode?: "verify" | "collect";
-    onCardAdded?: (card: ScryfallCard) => void;
+    onCardAdded?: (card: ScryfallCard, setCode?: string, collectorNumber?: string) => void;
   } = $props();
 
   type Phase = "starting" | "live" | "camera_error";
@@ -144,7 +144,9 @@
     history.pushState({ scannerOpen: true }, "");
 
     function onPopState() {
-      handleClose();
+      // The browser already popped the entry we pushed; tell handleClose not to
+      // pop again.
+      handleClose(true);
     }
 
     window.addEventListener("popstate", onPopState);
@@ -330,8 +332,9 @@
     if (!hit) return;
 
     if (mode === "collect") {
-      // In collect mode, call the onCardAdded callback
-      onCardAdded?.(hit.card);
+      // In collect mode, pass the scanned printing's set/collector info through
+      // so the scanner can record which physical card was captured.
+      onCardAdded?.(hit.card, hit.card.set, hit.card.collector_number);
     } else {
       if (!hit.deckCard) return;
       deckStore.recordCameraScan(hit.deckCard.id);
@@ -518,9 +521,16 @@
     }
   }
 
-  function handleClose() {
+  function handleClose(isPopState = false) {
     scanToken++;
     onClose();
+    // If the user closed via the UI (not a back gesture), pop the history entry
+    // we pushed when the camera opened — otherwise repeated open/close cycles
+    // stack dead entries that trap mobile users. On a real popstate the browser
+    // has already popped it, so we must not double-pop.
+    if (!isPopState && history.state?.scannerOpen) {
+      history.back();
+    }
   }
 
   function handleVideoMetadata() {
@@ -537,7 +547,7 @@
       class="flex items-center justify-between px-2 sm:px-4 py-2.5 text-white/90 shrink-0"
     >
       <button
-        onclick={handleClose}
+        onclick={() => handleClose()}
         class="btn btn-circle btn-ghost btn-sm text-white/70 hover:text-white"
         aria-label="Close scanner"
       >
@@ -781,7 +791,7 @@
               >Retry</button
             >
             <button
-              onclick={handleClose}
+              onclick={() => handleClose()}
               class="btn btn-ghost btn-sm text-white/70">Close</button
             >
           </div>

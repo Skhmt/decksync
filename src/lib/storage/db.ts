@@ -186,6 +186,16 @@ export async function cacheCards(cards: ScryfallCard[]): Promise<void> {
         store.put(entry);
       }
     }
+
+    // Keep the lazily-built in-memory id index current so repeat lookups for
+    // newly cached cards skip the network instead of missing the index.
+    if (cardIdIndex) {
+      for (const card of cards) {
+        if (card?.id && !card.id.startsWith('custom-')) {
+          cardIdIndex.set(card.id, card);
+        }
+      }
+    }
   } catch (err) {
     console.warn('Failed to cache cards in IndexedDB:', err);
   }

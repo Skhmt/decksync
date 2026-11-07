@@ -103,7 +103,7 @@ export function parseDecklistText(rawText: string, defaultDeckName = 'Imported D
     let collectorNumber: string | undefined;
 
     // Pattern 1: (SET:CN) or [SET:CN] e.g. (CMM:402), (plst:TMP-315)
-    const colonMatch = cardPart.match(/[\[\(]([a-zA-Z0-9]{2,6})\s*:\s*([a-zA-Z0-9★*\-\.]+)[\]\)]/);
+    const colonMatch = cardPart.match(/[\[\(]([a-zA-Z0-9]{2,6})\s*:\s*([a-zA-Z0-9★*\-\.\/]+)[\]\)]/);
     if (colonMatch) {
       setCode = colonMatch[1].toLowerCase();
       collectorNumber = colonMatch[2];
@@ -111,7 +111,7 @@ export function parseDecklistText(rawText: string, defaultDeckName = 'Imported D
     }
 
     // Pattern 2: (SET) CN or [SET] CN or (SET) e.g. (CMM) 402, (plst) TMP-315
-    const setNumMatch = cardPart.match(/[\[\(]([a-zA-Z0-9]{2,6})[\]\)]\s*([a-zA-Z0-9★*\-\.]+)?/);
+    const setNumMatch = cardPart.match(/[\[\(]([a-zA-Z0-9]{2,6})[\]\)]\s*([a-zA-Z0-9★*\-\.\/]+)?/);
     if (setNumMatch) {
       setCode = setCode || setNumMatch[1].toLowerCase();
       if (setNumMatch[2]) collectorNumber = collectorNumber || setNumMatch[2];
@@ -119,7 +119,7 @@ export function parseDecklistText(rawText: string, defaultDeckName = 'Imported D
     }
 
     // Pattern 3: Full set name in parentheses e.g. (Commander Masters) 402
-    const fullSetMatch = cardPart.match(/\([^\)]+\)\s*([a-zA-Z0-9★*\-\.]+)?/);
+    const fullSetMatch = cardPart.match(/\([^\)]+\)\s*([a-zA-Z0-9★*\-\.\/]+)?/);
     if (fullSetMatch) {
       if (fullSetMatch[1]) collectorNumber = collectorNumber || fullSetMatch[1];
       cardPart = cardPart.replace(fullSetMatch[0], ' ');

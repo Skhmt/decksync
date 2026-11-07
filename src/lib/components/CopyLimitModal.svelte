@@ -1,21 +1,36 @@
 <script lang="ts">
-  import { deckStore } from '../state/deck.svelte';
-  import type { DeckCardItem } from '../types';
+  import type { MTGFormat, ScryfallCard } from '../types';
   import { cloneIconSvg } from '../icons';
 
-  let { isOpen, onClose }: { isOpen: boolean; onClose: () => void } = $props();
+  /** A card as shown in a warning modal — works for both deck and scanned cards. */
+  interface WarningCard {
+    name: string;
+    targetCount?: number;
+    count?: number;
+    scryfall?: ScryfallCard;
+  }
+
+  let { isOpen, onClose, cards = [], format, getCopyLimit }: {
+    isOpen: boolean;
+    onClose: () => void;
+    cards?: WarningCard[];
+    format: MTGFormat;
+    getCopyLimit: (card: WarningCard) => number | null;
+  } = $props();
+
+  const qty = (c: WarningCard) => c.targetCount ?? c.count ?? 1;
 
   const isUniqueFormat = $derived(
-    deckStore.format === 'commander' || deckStore.format === 'oathbreaker'
+    format === 'commander' || format === 'oathbreaker'
   );
 
   /** Short explanation of why a card's count exceeds the format's limit */
-  function violationReason(card: DeckCardItem): string {
+  function violationReason(card: WarningCard): string {
     if (isUniqueFormat) {
       return 'Only one copy of each card is allowed';
     }
-    if (card.scryfall?.legalities?.[deckStore.format] === 'restricted') {
-      return `Restricted to 1 copy in ${deckStore.format}`;
+    if (card.scryfall?.legalities?.[format] === 'restricted') {
+      return `Restricted to 1 copy in ${format}`;
     }
     return 'Max 4 copies in the main deck';
   }
@@ -37,7 +52,7 @@
           <div>
             <h3 class="font-bold text-lg text-base-content">Too Many Copies</h3>
             <p class="text-xs text-base-content/60">
-              Format: <span class="font-semibold text-base-content uppercase">{deckStore.format}</span>
+              Format: <span class="font-semibold text-base-content uppercase">{format}</span>
             </p>
           </div>
         </div>
@@ -53,15 +68,15 @@
       <div class="mt-4 space-y-2">
         <p class="text-xs text-base-content/70">
           {#if isUniqueFormat}
-            {deckStore.format === 'oathbreaker' ? 'Oathbreaker' : 'Commander'} decks may only contain one copy of each card (basic lands are unlimited). The following cards exceed that limit:
+            {format === 'oathbreaker' ? 'Oathbreaker' : 'Commander'} decks may only contain one copy of each card (basic lands are unlimited). The following cards exceed that limit:
           {:else}
             You may include up to 4 copies of a non-land card in your main deck — restricted cards are limited to 1, and basic lands are unlimited. Sideboard copies don't count. The following cards exceed their limit:
           {/if}
         </p>
 
         <div class="space-y-1.5 max-h-72 overflow-y-auto mt-2">
-          {#each deckStore.copyLimitViolations as card}
-            {@const limit = deckStore.getCopyLimit(card)}
+          {#each cards as card}
+            {@const limit = getCopyLimit(card)}
             <div class="flex items-center justify-between p-2.5 bg-error/10 border border-error/20 rounded-xl text-xs">
               <div class="min-w-0">
                 <span class="font-bold text-error">{card.name}</span>
@@ -69,7 +84,7 @@
                 <p class="text-base-content/50 mt-0.5">{violationReason(card)}</p>
               </div>
               <span class="badge badge-sm badge-error font-mono shrink-0 ml-2">
-                {card.targetCount}x / max {limit ?? 1}
+                {qty(card)}x / max {limit ?? 1}
               </span>
             </div>
           {/each}

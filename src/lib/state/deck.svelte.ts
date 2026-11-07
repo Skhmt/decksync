@@ -184,6 +184,17 @@ export class DeckState {
           message: `${this.format.toUpperCase()} decks must contain at least 60 cards (currently ${total})`
         };
       }
+
+      // Sideboard is capped at 15 cards in 60-card formats.
+      const totalSideboard = this.cards
+        .filter((c) => c.section === 'sideboard')
+        .reduce((sum, c) => sum + c.targetCount, 0);
+      if (totalSideboard > 15) {
+        return {
+          isValid: false,
+          message: `Sideboard may contain at most 15 cards (currently ${totalSideboard})`
+        };
+      }
     }
 
     return { isValid: true, message: 'Card count matches format requirements' };
@@ -531,9 +542,12 @@ export class DeckState {
   }
 
   async logVerification(): Promise<DeckVerificationLog> {
+    // Key by section|name (like persistSession) so a card present in both the
+    // mainboard and sideboard doesn't collide — otherwise restoring this log
+    // would let the sideboard count overwrite the mainboard count.
     const checkedStatus: Record<string, number> = {};
     for (const c of this.cards) {
-      checkedStatus[c.name] = c.verifiedCount;
+      checkedStatus[`${c.section}|${c.name}`] = c.verifiedCount;
     }
 
     const log: DeckVerificationLog = {

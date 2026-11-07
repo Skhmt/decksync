@@ -52,9 +52,13 @@
 
     if (log.checkedStatus) {
       for (const card of deckStore.cards) {
-        if (typeof log.checkedStatus[card.name] === 'number') {
+        // New logs key checked status by section|name (so mainboard/sideboard
+        // duplicates don't collide); fall back to bare name for older logs.
+        const saved =
+          log.checkedStatus[`${card.section}|${card.name}`] ?? log.checkedStatus[card.name];
+        if (typeof saved === 'number') {
           // Never restore a negative count
-          card.verifiedCount = Math.max(0, log.checkedStatus[card.name]);
+          card.verifiedCount = Math.max(0, saved);
         }
       }
     }

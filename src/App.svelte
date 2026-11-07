@@ -20,6 +20,7 @@
   import CategoryNav from './lib/components/CategoryNav.svelte';
   import ExportModal from './lib/components/ExportModal.svelte';
   import { archiveIconSvg, warningIconSvg } from './lib/icons';
+  import type { DeckCardItem, ScannedDeckCard } from './lib/types';
 
   let isImportOpen = $state(false);
   let isHistoryOpen = $state(false);
@@ -191,17 +192,38 @@
   <!-- Modals -->
   <ImportModal isOpen={isImportOpen} onClose={() => isImportOpen = false} />
   <HistoryModal isOpen={isHistoryOpen} onClose={() => isHistoryOpen = false} />
-  <BannedModal isOpen={isBannedOpen} onClose={() => isBannedOpen = false} />
-  <GameChangerModal isOpen={isGameChangersOpen} onClose={() => isGameChangersOpen = false} />
-  <CopyLimitModal isOpen={isCopyLimitOpen} onClose={() => isCopyLimitOpen = false} />
-  <NotLegalModal isOpen={isNotLegalOpen} onClose={() => isNotLegalOpen = false} />
+  <BannedModal
+    isOpen={isBannedOpen}
+    cards={appMode === 'sync' ? deckStore.bannedCards : scannerStore.bannedCards}
+    format={appMode === 'sync' ? deckStore.format : scannerStore.format}
+    onClose={() => isBannedOpen = false}
+  />
+  <GameChangerModal
+    isOpen={isGameChangersOpen}
+    cards={appMode === 'sync' ? deckStore.gameChangerCards : scannerStore.gameChangerCards}
+    format={appMode === 'sync' ? deckStore.format : scannerStore.format}
+    onClose={() => isGameChangersOpen = false}
+  />
+  <CopyLimitModal
+    isOpen={isCopyLimitOpen}
+    cards={appMode === 'sync' ? deckStore.copyLimitViolations : scannerStore.copyLimitViolations}
+    format={appMode === 'sync' ? deckStore.format : scannerStore.format}
+    getCopyLimit={appMode === 'sync' ? (c) => deckStore.getCopyLimit(c as DeckCardItem) : (c) => scannerStore.getCopyLimit(c as ScannedDeckCard)}
+    onClose={() => isCopyLimitOpen = false}
+  />
+  <NotLegalModal
+    isOpen={isNotLegalOpen}
+    cards={appMode === 'sync' ? deckStore.notLegalCards : scannerStore.notLegalCards}
+    format={appMode === 'sync' ? deckStore.format : scannerStore.format}
+    onClose={() => isNotLegalOpen = false}
+  />
   <AboutModal isOpen={isAboutOpen} onClose={() => isAboutOpen = false} />
   <ExportModal isOpen={isExportOpen} onClose={() => isExportOpen = false} />
   <CardScanModal
     isOpen={isScanOpen}
     onClose={() => isScanOpen = false}
     mode={appMode === 'scan' ? 'collect' : 'verify'}
-    onCardAdded={(card) => scannerStore.addCard(card)}
+    onCardAdded={(card, setCode, collectorNumber) => scannerStore.addCard(card, setCode, collectorNumber)}
   />
 
   <!-- Bottom toast with undo when a card is verified or removed in the filtered views -->
