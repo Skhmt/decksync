@@ -35,7 +35,7 @@ export class ScannerState {
 
   /** Cards flagged as game-changers by Scryfall */
   gameChangerCards = $derived(
-    this.cards.filter(c => c.scryfall?.game_changer || c.scryfall?.['game-changer'])
+    this.cards.filter(c => c.scryfall?.game_changer)
   );
 
   /** Count of game changer cards */

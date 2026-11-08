@@ -47,6 +47,24 @@ const MAX_CROP_WIDTH = 640;
  * cardZoneForFrame() in cardScanner.ts. Returns null when the crop is too small
  * to be meaningful.
  */
+/** Reusable offscreen canvas to avoid per-crop allocation (GC + GPU context churn). */
+let cropCanvas: HTMLCanvasElement | null = null;
+let cropCtx: CanvasRenderingContext2D | null = null;
+
+function getCropContext(w: number, h: number): CanvasRenderingContext2D {
+  if (!cropCanvas) {
+    cropCanvas = document.createElement('canvas');
+  }
+  if (cropCanvas.width !== w || cropCanvas.height !== h) {
+    cropCanvas.width = w;
+    cropCanvas.height = h;
+  }
+  if (!cropCtx) {
+    cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true })!;
+  }
+  return cropCtx;
+}
+
 function cropHashRegion(
   frame: HTMLCanvasElement,
   region: { x0: number; y0: number; x1: number; y1: number }
@@ -71,10 +89,7 @@ function cropHashRegion(
   const w = Math.max(8, Math.round(sw * scale));
   const h = Math.max(8, Math.round(sh * scale));
 
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  const ctx = getCropContext(w, h);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(frame, sx, sy, sw, sh, 0, 0, w, h);

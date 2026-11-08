@@ -14,7 +14,7 @@ let dbPromise: Promise<IDBDatabase> | null = null;
 function getDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
 
-  dbPromise = new Promise((resolve, reject) => {
+  const p = new Promise<IDBDatabase>((resolve, reject) => {
     if (typeof window === 'undefined' || !window.indexedDB) {
       reject(new Error('IndexedDB is not supported in this environment'));
       return;
@@ -54,7 +54,12 @@ function getDB(): Promise<IDBDatabase> {
     request.onerror = () => reject(request.error);
   });
 
-  return dbPromise;
+  dbPromise = p;
+  // Reset on failure so the next call can retry (e.g., after a transient
+  // corruption or quota issue is resolved by the user).
+  p.catch(() => { dbPromise = null; });
+
+  return p;
 }
 
 // --- Verification Logs ---

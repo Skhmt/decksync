@@ -83,11 +83,19 @@ export function parseSetAndCollector(raw: string): SetCodeParse | null {
 
   // Last resort: OCR merged everything into one blob ("MH3259") — the token must
   // end in a digit and be followed by 2+ digits, so a bare "MH3" never matches.
-  const compact = raw
-    .toUpperCase()
-    .replace(/[^A-Z0-9\s]/g, ' ')
-    .match(/\b([A-Z]+[0-9])(\d{2,4})\b/) ??
-  raw.toUpperCase().replace(/[^A-Z0-9\s]/g, ' ').match(/\b([A-Z]+[0-9]{2})(\d{2,4})\b/);
+  const normalized = raw.toUpperCase().replace(/[^A-Z0-9\s]/g, ' ');
+  const compact = normalized.match(/\b([A-Z]+[0-9])(\d{2,4})\b/) ??
+    normalized.match(/\b([A-Z]+[0-9]{2})(\d{2,4})\b/);
+
+  // Letter-only set codes (e.g. "ONE259" → set ONE, #259): the compact pattern
+  // above would greedily parse this as ONE2 + 59. If a letter-only interpretation
+  // yields a longer collector number, prefer it (3-4 digit numbers are more
+  // plausible than 2-digit ones for modern sets).
+  const letterOnly = normalized.match(/\b([A-Z]{2,})(\d{3,4})\b/);
+  if (letterOnly && (!compact || letterOnly[2].length > compact[2].length)) {
+    return { setCode: letterOnly[1], collectorNumber: stripLeadingZeros(letterOnly[2]) };
+  }
+
   if (compact) return { setCode: compact[1], collectorNumber: stripLeadingZeros(compact[2]) };
 
   return null;

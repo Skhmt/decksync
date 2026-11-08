@@ -23,8 +23,9 @@ export function parseDecklistText(rawText: string, defaultDeckName = 'Imported D
     let line = rawLine.trim();
     if (!line) continue;
 
-    // Check for comments or section headers
-    if (line.startsWith('//') || line.startsWith('#') || (line.startsWith('[') && line.endsWith(']')) || line.endsWith(':')) {
+    // Check for comments or section headers (but not card lines that happen to end with ':')
+    const isCardLine = linePattern.test(line);
+    if (!isCardLine && (line.startsWith('//') || line.startsWith('#') || (line.startsWith('[') && line.endsWith(']')) || line.endsWith(':'))) {
       const lower = line.toLowerCase();
       if (lower.includes('commander') || lower.includes('commanders')) {
         currentSection = 'commander';

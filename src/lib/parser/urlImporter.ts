@@ -5,6 +5,47 @@ export interface UrlImportOptions {
   corsProxy?: boolean;
 }
 
+// --- Minimal API response shapes (only the fields we actually read) ---
+
+interface MoxfieldSectionEntry {
+  card?: { id?: string; name?: string; set?: string; cn?: number | string };
+  quantity?: number;
+  isFoil?: boolean;
+}
+
+interface MoxfieldDeckResponse {
+  name?: string;
+  commanders?: Record<string, MoxfieldSectionEntry>;
+  companions?: Record<string, MoxfieldSectionEntry>;
+  mainboard?: Record<string, MoxfieldSectionEntry>;
+  sideboard?: Record<string, MoxfieldSectionEntry>;
+}
+
+interface ArchidektCategory {
+  name?: string;
+  includedInDeck?: boolean;
+}
+
+interface ArchidektCardRef {
+  oracleCard?: { name?: string };
+  name?: string;
+  edition?: { editioncode?: string };
+  collectorNumber?: string;
+}
+
+interface ArchidektDeckItem {
+  id?: number | string;
+  card?: ArchidektCardRef;
+  quantity?: number;
+  categories?: (string | { name: string })[];
+}
+
+interface ArchidektDeckResponse {
+  name?: string;
+  cards?: ArchidektDeckItem[];
+  categories?: ArchidektCategory[];
+}
+
 interface FetchSource {
   name: string;
   buildUrl: (url: string) => string;
@@ -174,7 +215,7 @@ async function importFromMoxfield(url: string): Promise<ParsedDeckResult> {
 
   const apiUrl = `https://api.moxfield.com/v2/decks/all/${deckId}`;
   const jsonText = await fetchWithFallback(apiUrl, { expectJson: true });
-  let data: any;
+  let data: MoxfieldDeckResponse;
   try {
     data = JSON.parse(jsonText);
   } catch {
@@ -184,11 +225,11 @@ async function importFromMoxfield(url: string): Promise<ParsedDeckResult> {
   const deckName = data.name || 'Moxfield Deck';
   const cards: DeckCardItem[] = [];
 
-  const addEntries = (sectionObj: Record<string, any> | undefined, section: DeckCardItem['section']) => {
+  const addEntries = (sectionObj: Record<string, MoxfieldSectionEntry> | undefined, section: DeckCardItem['section']) => {
     if (!sectionObj) return;
     for (const key of Object.keys(sectionObj)) {
       const entry = sectionObj[key];
-      const card = entry.card || entry;
+      const card = entry.card || {};
       const count = entry.quantity || 1;
       const name = card.name || key;
       cards.push({
@@ -199,7 +240,7 @@ async function importFromMoxfield(url: string): Promise<ParsedDeckResult> {
         verifiedCount: 0,
         section,
         setCode: card.set?.toLowerCase(),
-        collectorNumber: card.cn,
+        collectorNumber: card.cn != null ? String(card.cn) : undefined,
         isFoil: entry.isFoil || false
       });
     }
@@ -229,7 +270,7 @@ async function importFromArchidekt(url: string): Promise<ParsedDeckResult> {
 
   const apiUrl = `https://archidekt.com/api/decks/${deckId}/`;
   const jsonText = await fetchWithFallback(apiUrl, { expectJson: true });
-  let data: any;
+  let data: ArchidektDeckResponse;
   try {
     data = JSON.parse(jsonText);
   } catch {
@@ -260,7 +301,9 @@ async function importFromArchidekt(url: string): Promise<ParsedDeckResult> {
       if (!cardName) continue;
 
       const count = item.quantity || 1;
-      const categories: string[] = Array.isArray(item.categories) ? item.categories.map((c: any) => String(c).toLowerCase()) : [];
+      const categories: string[] = Array.isArray(item.categories)
+        ? item.categories.map((c) => (typeof c === 'string' ? c : c.name).toLowerCase())
+        : [];
 
       // Skip cards in "not in deck" categories (Maybeboard, custom excluded categories, ...)
       if (categories.some(c => excludedCategories.has(c))) continue;
