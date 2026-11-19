@@ -53,8 +53,9 @@ interface FetchSource {
   extract?: (raw: string) => string;
 }
 
-// Proxy sources raced in parallel for cross-origin fetches. Order only affects
-// which error we keep if everything fails — the first *valid* response wins.
+// Proxy sources for cross-origin fetches. Tried sequentially (not in parallel)
+// to avoid hammering multiple third-party services on every import and to reduce
+// privacy exposure (fewer sites see your deck URL simultaneously).
 //
 // jina-reader (r.jina.ai) is the most reliable source for Cloudflare-protected
 // deck APIs (Moxfield, Archidekt): it echoes the requesting origin in
@@ -74,21 +75,6 @@ const PROXY_SOURCES: FetchSource[] = [
   {
     name: 'allorigins-raw',
     buildUrl: (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
-  },
-  {
-    name: 'codetabs',
-    buildUrl: (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
-  },
-  {
-    name: 'allorigins-json',
-    buildUrl: (url: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-    extract: (raw: string): string => JSON.parse(raw).contents
-  },
-  {
-    // Only works if the user previously opted in on cors-anywhere.com, but it is
-    // harmless to race alongside the others.
-    name: 'cors-anywhere',
-    buildUrl: (url: string) => `https://cors-anywhere.com/${encodeURIComponent(url)}`
   }
 ];
 
@@ -136,31 +122,10 @@ async function fetchFromSource(
   return content;
 }
 
-/** Resolves with the first fulfilled value, rejects only when every promise fails. */
-function firstSuccess(promises: Promise<string>[]): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    let pending = promises.length;
-    let lastError: unknown = new Error('All fetch sources failed');
-    if (pending === 0) {
-      reject(lastError);
-      return;
-    }
-    for (const promise of promises) {
-      promise.then(
-        (value) => resolve(value),
-        (error) => {
-          lastError = error;
-          if (--pending === 0) reject(lastError);
-        }
-      );
-    }
-  });
-}
-
 /**
  * Fetches a URL from the browser, working around CORS restrictions:
  * 1. Try a direct fetch first (fast path for sites that allow cross-origin reads).
- * 2. Race a pool of public reader proxies in parallel; the first valid response wins.
+ * 2. Fall back to proxy sources sequentially; the first valid response wins.
  *
  * Deck sites such as Moxfield and Archidekt do not send permissive CORS headers,
  * so step 2 is what actually makes URL imports work for them.
@@ -187,17 +152,15 @@ export async function fetchWithFallback(
     // Direct fetch failed (likely a browser CORS block), continue to proxies.
   }
 
-  // 2. Race all proxy sources in parallel — first valid response wins
-  try {
-    return await firstSuccess(
-      PROXY_SOURCES.map((source) =>
-        fetchFromSource(source, url, PROXY_TIMEOUT_MS, expectJson).catch((err: unknown) => {
-          throw err instanceof Error ? err : new Error(String(err));
-        })
-      )
-    );
-  } catch {
-    // Every source failed — fall through to the final error below.
+  // 2. Sequential proxy fallback — try each source in order until one succeeds.
+  //    This avoids hammering multiple third-party services simultaneously and
+  //    reduces privacy exposure (fewer sites see your deck URL at once).
+  for (const source of PROXY_SOURCES) {
+    try {
+      return await fetchFromSource(source, url, PROXY_TIMEOUT_MS, expectJson);
+    } catch {
+      // This proxy failed — try the next one.
+    }
   }
 
   throw new Error(

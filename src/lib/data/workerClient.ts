@@ -34,6 +34,8 @@ function getWorker(): Worker | null {
         request.reject(new Error(message));
         pending.delete(id);
       }
+      // Null the dead worker so the next getWorker() call spawns a fresh one
+      worker = null;
     });
   }
   return worker;

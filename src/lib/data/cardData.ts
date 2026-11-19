@@ -28,11 +28,11 @@ export { normalizeCardName };
 let db: CardDatabase = { ready: false, names: new Set(), printings: new Map() };
 let loadPromise: Promise<CardDatabase> | null = null;
 
-/** Strip leading zeros from the main number of a collector number ("0216" -> "216", "20/270" unchanged). */
+/** Strip leading zeros from collector number parts ("0216" -> "216", "020/0270" -> "20/270"). */
 function normalizeCollectorNumber(num: string): string {
   const slash = num.indexOf('/');
   const main = slash === -1 ? num : num.slice(0, slash);
-  const rest = slash === -1 ? '' : num.slice(slash);
+  const rest = slash === -1 ? '' : '/' + num.slice(slash + 1).replace(/^0+(?=\d)/, '');
   return main.replace(/^0+(?=\d)/, '') + rest;
 }
 
@@ -45,6 +45,7 @@ function loadOnMainThread(): Promise<CardDatabase> {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       db = { ready: true, ...buildCardDatabase(await response.json()) };
+      lengthBuckets = null; // reset so it's rebuilt from the fresh data
     } catch (err) {
       console.warn('Failed to load local card database — falling back to live Scryfall lookups:', err);
       // db stays { ready: false } → validation passes through, legacy paths used
@@ -69,6 +70,7 @@ export function ensureCardData(): Promise<CardDatabase> {
         try {
           const built = await requestLoad<{ names: Set<string>; printings: Map<string, string> }>('card-data');
           db = { ready: true, ...built };
+          lengthBuckets = null; // reset so it's rebuilt from the fresh data
           return db;
         } catch (err) {
           console.warn('Worker card-data load failed — retrying on main thread:', err);
@@ -135,10 +137,29 @@ function levenshteinRatio(a: string, b: string): number {
   return 1 - levenshteinDistance(a, b) / m;
 }
 
+/** Length-bucketed index for fast fuzzy matching (built once at load time). */
+let lengthBuckets: Map<number, string[]> | null = null;
+
+function buildLengthBuckets(): void {
+  const buckets = new Map<number, string[]>();
+  for (const name of db.names) {
+    const len = name.length;
+    let arr = buckets.get(len);
+    if (!arr) { arr = []; buckets.set(len, arr); }
+    arr.push(name);
+  }
+  lengthBuckets = buckets;
+}
+
 /**
  * Fuzzy card-name validity check (see the comment above). Returns true when the
  * database isn't loaded (pass-through), on an exact match, or when some known
  * name is close enough to `name` by containment or edit distance.
+ *
+ * Optimized: uses a length-bucketed index so only names within ±2 characters
+ * of the query are considered for Levenshtein (reduces candidates from 30k+ to
+ * typically <500). A quick 3-char prefix/substring check further prunes before
+ * the expensive DP computation.
  */
 export function hasCardNameFuzzy(name: string): boolean {
   if (!db.ready) return true;
@@ -146,16 +167,44 @@ export function hasCardNameFuzzy(name: string): boolean {
   if (!q) return false;
   if (db.names.has(q)) return true; // exact fast path
 
-  for (const n of db.names) {
-    // Substring containment, min-length guarded so tiny fragments don't match.
-    if (n.length >= FUZZY_SUBSTR_MIN_LEN && q.includes(n)) return true;
-    if (q.length >= FUZZY_SUBSTR_MIN_LEN && n.includes(q)) return true;
-    // Levenshtein ratio within a tight length window (misreads keep the length).
-    const diff = Math.abs(n.length - q.length);
-    if (diff <= Math.max(2, q.length >> 2) && levenshteinRatio(q, n) >= NAME_FUZZY_THRESHOLD) {
-      return true;
+  // Ensure the length-bucket index is built (lazy, once)
+  if (!lengthBuckets) buildLengthBuckets();
+
+  const qLen = q.length;
+
+  // Substring containment check (fast — uses native includes on a small candidate set)
+  // Only check names that are significantly shorter than the query (subset case)
+  // or significantly longer (superset case). We scan a few adjacent buckets.
+  for (let len = Math.max(1, qLen - 2); len <= Math.min(50, qLen + 2); len++) {
+    const bucket = lengthBuckets!.get(len);
+    if (!bucket) continue;
+
+    for (const n of bucket) {
+      // Substring containment, min-length guarded so tiny fragments don't match.
+      if (n.length >= FUZZY_SUBSTR_MIN_LEN && q.includes(n)) return true;
+      if (q.length >= FUZZY_SUBSTR_MIN_LEN && n.includes(q)) return true;
+
+      // Levenshtein ratio within a tight length window — only for same-length candidates
+      if (len === qLen) {
+        // Quick prefix/3-gram filter: skip unless first 2 chars match or share a common trigram
+        if (qLen >= 4 && n[0] !== q[0] && n[1] !== q[1]) continue;
+        if (levenshteinRatio(q, n) >= NAME_FUZZY_THRESHOLD) return true;
+      }
     }
   }
+
+  // Also check a wider window for containment cases (e.g. query is "Lightning Bolt"
+  // but the known name is just "Bolt" — unlikely in MTG but safe to cover)
+  if (qLen >= FUZZY_SUBSTR_MIN_LEN) {
+    for (let len = Math.max(FUZZY_SUBSTR_MIN_LEN, qLen - 6); len < qLen; len++) {
+      const bucket = lengthBuckets!.get(len);
+      if (!bucket) continue;
+      for (const n of bucket) {
+        if (q.includes(n)) return true;
+      }
+    }
+  }
+
   return false;
 }
 

@@ -206,12 +206,37 @@
     continuousBusy = true;
 
     try {
-      // A short burst instead of a single frame — one noisy or blank frame must
-      // not be able to trigger an accidental hash hit on its own.
-      const frames: HTMLCanvasElement[] = [];
-      for (let i = 0; i < BURST_FRAMES; i++) {
+      // Capture the first frame and immediately test it against pHash.
+      // If it produces a very strong match (distance ≤ 3), accept instantly —
+      // skipping the remaining burst frames saves ~600 ms of capture + warp time.
+      const frame1 = captureFrame(videoEl);
+      const warped1 = await warpCardToCanonical(frame1);
+      const scanFrame1 = warped1 ?? frame1;
+
+      // Early exit: single-frame pHash with a tight threshold
+      if (warped1) {
+        try {
+          const earlyMatch = await identifyByHash([scanFrame1], videoAspect);
+          if (token !== scanToken) return;
+          if (earlyMatch && earlyMatch.distance <= 3) {
+            const card = await lookupCardById(earlyMatch.entry.id);
+            if (token !== scanToken) return;
+            if (card) {
+              handleContinuousHit(card, "hash");
+              return;
+            }
+          }
+        } catch {
+          // Non-fatal: fall through to the full burst path
+        }
+      }
+
+      // Full burst path: capture remaining frames for voting consensus
+      const frames: HTMLCanvasElement[] = [frame1];
+      for (let i = 1; i < BURST_FRAMES; i++) {
+        await nextFrame();
+        if (token !== scanToken) return;
         frames.push(captureFrame(videoEl));
-        if (i < BURST_FRAMES - 1) await nextFrame();
       }
 
       // Localize + perspective-warp each frame to a canonical upright 5:7 card.

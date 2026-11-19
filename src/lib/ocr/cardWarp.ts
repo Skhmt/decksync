@@ -18,9 +18,12 @@ import { CARD_ASPECT, CARD_ZONE_MARGIN } from './cardScanner';
 
 const OPENCV_DIR = `${import.meta.env.BASE_URL}opencv/`;
 
-/** Canonical output: a true 5:7 card rectangle (width × height). */
-export const OUT_W = 600;
-export const OUT_H = Math.round(OUT_W / CARD_ASPECT); // === 840 (2.5/3.5)
+/** Canonical output: a true 5:7 card rectangle (width × height).
+ *  Doubled from 600 to 1200 so the card area (after CARD_ZONE_MARGIN) is
+ *  600×840 px instead of 300×420 — doubling OCR text legibility for the
+ *  tiny collector-number font without significant OpenCV wasm overhead. */
+export const OUT_W = 1200;
+export const OUT_H = Math.round(OUT_W / CARD_ASPECT); // === 1680 (2.5/3.5)
 
 // Detection runs on a downscaled frame so findContours stays fast.
 const DETECT_MAX_DIM = 512;
@@ -145,6 +148,10 @@ export async function warpCardToCanonical(frame: HTMLCanvasElement): Promise<HTM
   return warpWithCv(cv, frame);
 }
 
+/** Reusable work canvas to avoid per-frame allocation (GC + GPU context churn).
+ *  The scan loop is strictly sequential, so a single reusable canvas is safe. */
+let workCanvas: HTMLCanvasElement | null = null;
+
 /** The detect-and-warp pipeline. Synchronous given a ready OpenCV API object. */
 function warpWithCv(cv: OpenCvApi, frame: HTMLCanvasElement): HTMLCanvasElement | null {
   const fullW = frame.width;
@@ -162,8 +169,17 @@ function warpWithCv(cv: OpenCvApi, frame: HTMLCanvasElement): HTMLCanvasElement 
 
   try {
     // --- 1. Edge map on a downscaled copy (fast findContours). --------------
+    // Reuse the work canvas to avoid per-frame allocation
+    if (!workCanvas) workCanvas = document.createElement('canvas');
+    if (workCanvas.width !== workW || workCanvas.height !== workH) {
+      workCanvas.width = workW;
+      workCanvas.height = workH;
+    }
+    const work = workCanvas;
+    work.getContext('2d')!.drawImage(frame, 0, 0, workW, workH);
+
     const gray = track(new cv.Mat());
-    cv.cvtColor(track(rgbaFromCanvas(cv, frameToWork(frame, workW, workH))), gray, cv.COLOR_RGBA2GRAY);
+    cv.cvtColor(track(rgbaFromCanvas(cv, work)), gray, cv.COLOR_RGBA2GRAY);
     const blurred = track(new cv.Mat());
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
     const edges = track(new cv.Mat());
@@ -278,15 +294,6 @@ function toPointMat(cv: OpenCvApi, pts: { x: number; y: number }[]): any {
   const data = new Float32Array(pts.length * 2);
   pts.forEach((p, i) => { data[i * 2] = p.x; data[i * 2 + 1] = p.y; });
   return cv.matFromArray(pts.length, 1, cv.CV_32FC2, data);
-}
-
-/** Draws a frame down to workW×workH. */
-function frameToWork(frame: HTMLCanvasElement, workW: number, workH: number): HTMLCanvasElement {
-  const c = document.createElement('canvas');
-  c.width = workW;
-  c.height = workH;
-  c.getContext('2d')!.drawImage(frame, 0, 0, workW, workH);
-  return c;
 }
 
 /** Allocates an empty Mat and copies `u8` in via the `.data` view. The direct

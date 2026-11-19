@@ -182,35 +182,29 @@ export async function identifyByHash(
 
   const classKey = hashAspectClassKey(frameAspect);
   // Votes per entry id (a card can have several face entries — front + DFC back)
-  const votes = new Map<string, { card: string; count: number; totalDist: number }>();
-  let bestEntry: CardHashEntry | null = null;
-  let bestDistance = Infinity;
+  const votes = new Map<string, { card: string; count: number; totalDist: number; bestDist: number }>();
 
   for (const frame of frames) {
     const m = matchFrame(frame, classKey, idx.entries, idx.packed, idx.region, idx.threshold);
     if (!m) continue;
-    const v = votes.get(m.entry.id) ?? { card: m.entry.id, count: 0, totalDist: 0 };
+    const v = votes.get(m.entry.id) ?? { card: m.entry.id, count: 0, totalDist: 0, bestDist: 65 };
     v.count++;
     v.totalDist += m.distance;
+    if (m.distance < v.bestDist) v.bestDist = m.distance;
     votes.set(m.entry.id, v);
-    if (m.distance < bestDistance) {
-      bestDistance = m.distance;
-      bestEntry = m.entry;
-    }
   }
 
-  if (!bestEntry || votes.size === 0) return null;
+  if (votes.size === 0) return null;
 
-  // Most votes wins; ties break on the lower average distance of the votes
-  let winner: { card: string; count: number; totalDist: number } | null = null;
+  // Most votes wins; ties break on the lower best distance of the winning card's own frames
+  let winner: { card: string; count: number; totalDist: number; bestDist: number } | null = null;
   for (const v of votes.values()) {
-    if (!winner || v.count > winner.count || (v.count === winner.count && v.totalDist < winner.totalDist)) {
+    if (!winner || v.count > winner.count || (v.count === winner.count && v.bestDist < winner.bestDist)) {
       winner = v;
     }
   }
   if (!winner) return null;
 
-  // Prefer the voting entry whose id matches the winner when several faces share it
-  const entry = idx.entries.find(e => e.id === winner.card) ?? bestEntry;
-  return { entry, distance: bestDistance, votes: winner.count };
+  const entry = idx.entries.find(e => e.id === winner.card)!;
+  return { entry, distance: winner.bestDist, votes: winner.count };
 }

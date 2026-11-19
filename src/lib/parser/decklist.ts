@@ -136,12 +136,22 @@ export function parseDecklistText(rawText: string, defaultDeckName = 'Imported D
     cardPart = cardPart.replace(/#.*$/, ' ');
     cardPart = cardPart.replace(/\s+\d+[a-zA-Z★*]*\s*$/, ' ');
 
-    // Clean up trailing comments
-    cardPart = cardPart.replace(/\/\/.*$/, ' ');
+    // Clean up trailing comments — but preserve " // " (split card separator).
+    // A comment is "//" at the END of a line with no space before the second slash,
+    // or when what follows looks like a section label. Split cards use " // " with
+    // spaces on both sides and a valid card name after.
+    const splitCardMatch = cardPart.match(/^(.+?)\s+\/\/\s+(.+)$/);
+    if (splitCardMatch) {
+      // This is a split card — keep the full name, no comment stripping needed
+      // (the " // " separator is part of the card name)
+    } else {
+      cardPart = cardPart.replace(/\/\/.*$/, ' ');
+    }
 
     // Moxfield double faced cards as "1 Tony Stark / The Invincible Iron Man (MSH) 80"
-    // Just get the left half before the /
-    if (cardPart.includes('/')) {
+    // Only split on single "/" (Moxfield DFC format), not "//" (split cards like
+    // "Swords to Plowstones // Plowstones to Swords" which must be preserved).
+    if (!cardPart.includes('//') && cardPart.includes('/')) {
       cardPart = cardPart.split('/')[0].trim();
     }
 
@@ -185,7 +195,8 @@ export function cleanCardName(name: string): string {
     cleaned = cleaned.slice(1, -1).trim();
   }
   // Moxfield double faced cards as "Tony Stark / The Invincible Iron Man" -> left half before the /
-  if (cleaned.includes('/')) {
+  // Only split on single "/" (not "//" which is used for split cards)
+  if (!cleaned.includes('//') && cleaned.includes('/')) {
     cleaned = cleaned.split('/')[0].trim();
   }
   // Remove any trailing collector numbers/hyphens e.g. -315

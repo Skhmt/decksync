@@ -1,7 +1,7 @@
 import type { DeckVerificationLog, SavedDeckSession, ScryfallCard, SavedScannedDeck } from '../types';
 
 const DB_NAME = 'decksync_db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 interface CachedCardEntry {
   name: string;
@@ -41,6 +41,13 @@ function getDB(): Promise<IDBDatabase> {
       // Card cache store: to cache Scryfall card data
       if (!db.objectStoreNames.contains('cardCache')) {
         db.createObjectStore('cardCache', { keyPath: 'name' });
+      }
+
+      // Printing-specific card cache: keyed by "${setCode}:${collectorNumber}" so
+      // specific printings (e.g. "cmm:402") can be cached independently of the
+      // default name-keyed entry. Eliminates the Scryfall search storm on reload.
+      if (!db.objectStoreNames.contains('cardCacheByPrinting')) {
+        db.createObjectStore('cardCacheByPrinting', { keyPath: 'printingKey' });
       }
 
       // Scanned decks store: for deck scanner mode sessions
@@ -299,6 +306,59 @@ export async function clearScannedDecks(): Promise<void> {
     const req = store.clear();
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
+  });
+}
+
+// --- Printing-Specific Card Cache (keyed by set:collectorNumber) ---
+
+interface CachedPrintingEntry {
+  printingKey: string; // "${setCode}:${collectorNumber}" (lowercase)
+  card: ScryfallCard;
+  cachedAt: number;
+}
+
+/** Builds the canonical printing key from a set code and collector number. */
+export function makePrintingKey(setCode: string, collectorNumber: string): string {
+  return `${setCode.toLowerCase()}:${String(collectorNumber).toLowerCase()}`;
+}
+
+/** Looks up a previously cached specific printing by set code + collector number. */
+export async function getCachedCardByPrinting(setCode: string, collectorNumber: string): Promise<ScryfallCard | null> {
+  if (typeof window === 'undefined' || !window.indexedDB) return null;
+  const key = makePrintingKey(setCode, collectorNumber);
+  try {
+    const db = await getDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('cardCacheByPrinting', 'readonly');
+      const store = tx.objectStore('cardCacheByPrinting');
+      const req = store.get(key);
+      req.onsuccess = () => {
+        const entry = req.result as CachedPrintingEntry | undefined;
+        resolve(entry?.card ?? null);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Caches specific printing cards (keyed by set:collectorNumber). */
+export async function cachePrintings(entries: Array<{ setCode: string; collectorNumber: string; card: ScryfallCard }>): Promise<void> {
+  if (typeof window === 'undefined' || !window.indexedDB) return;
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('cardCacheByPrinting', 'readwrite');
+    const store = tx.objectStore('cardCacheByPrinting');
+    for (const e of entries) {
+      store.put({
+        printingKey: makePrintingKey(e.setCode, e.collectorNumber),
+        card: e.card,
+        cachedAt: Date.now()
+      });
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
 }
 

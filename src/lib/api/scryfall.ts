@@ -1,5 +1,5 @@
 import type { ScryfallCard, DeckCardItem } from '../types';
-import { getCachedCard, getCachedCardById, cacheCards } from '../storage/db';
+import { getCachedCard, getCachedCardById, cacheCards, getCachedCardByPrinting, cachePrintings } from '../storage/db';
 import { pickBestNameMatch } from '../ocr/parse';
 import { ensureCardData, findPrintingId, hasCardName, hasCardNameFuzzy, isCardDataReady } from '../data/cardData';
 
@@ -84,12 +84,9 @@ export function getCardImageUrl(card?: ScryfallCard, faceIndex = 0): string {
     return card.card_faces[0].image_uris!.normal!;
   }
 
-  // Fallback: if an image can't be found, get image via Scryfall named?fuzzy image redirect
-  if (card.name) {
-    const cleanSearch = card.name.split('/')[0].replace(/[-–—]?\s*\d+.*$/, '').trim();
-    return `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cleanSearch || card.name)}&format=image`;
-  }
-
+  // Fallback: if no image URIs are available, return empty string — the UI shows
+  // a generic card placeholder. Previously this hotlinked to api.scryfall.com's
+  // redirect endpoint, which counts against the API rate limit and breaks offline.
   return '';
 }
 
@@ -227,9 +224,10 @@ export async function enrichDeckCards(
   }
 
   // 3. Fetch specific printings (set code + collector number) requested by the decklist,
-  //    so card images match the exact printing listed. If a printing can't be found
-  //    (e.g. invalid set), no entry is added and the name-resolved default card above
-  //    is used instead (current behavior).
+  //    so card images match the exact printing listed. Uses the local printing map
+  //    (card-data.json) to resolve Scryfall IDs directly, then batch-fetches via
+  //    /cards/collection — eliminating the old paginated search storm. Results are
+  //    cached in IndexedDB by printing key so subsequent loads require zero requests.
   const printMap = new Map<string, ScryfallCard>();
   const printRequests: Array<{ name: string; setCode: string; collectorNumber: string }> = [];
   const seenPrintKeys = new Set<string>();
@@ -251,78 +249,170 @@ export async function enrichDeckCards(
     printRequests.push({ name: item.name, setCode, collectorNumber });
   }
 
-  for (let i = 0; i < printRequests.length; i += PRINT_BATCH_SIZE) {
-    const batch = printRequests.slice(i, i + PRINT_BATCH_SIZE);
-    // One OR clause per requested printing: exact name within the requested set.
-    // Parentheses keep boolean precedence unambiguous; unknown sets simply match
-    // nothing, so they don't affect the other clauses (fallback stays intact).
-    // unique=prints is required so all matching printings are returned (the default
-    // dedupes to a single representative printing per card).
-    const q = batch
-      .map(r => `(name:"${r.name.replace(/"/g, '')}" set:${r.setCode})`)
-      .join(' OR ');
+  // 3a. Check the printing-specific IndexedDB cache first (zero network on reload)
+  const missingPrints: Array<{ name: string; setCode: string; collectorNumber: string; scryfallId?: string }> = [];
+  const newPrintCards: ScryfallCard[] = [];
 
-    try {
-      let page = 1;
-      let hasMore = true;
-      while (hasMore && page <= MAX_PRINT_PAGES) {
-        const url = `${SCRYFALL_SEARCH_URL}?q=${encodeURIComponent(q)}&page_size=${PRINT_PAGE_SIZE}&unique=prints&page=${page}`;
-        const response = await fetch(url, {
-          headers: {
-            'Accept': 'application/json',
-            'User-Agent': 'DeckSync/1.0'
-          }
-        });
+  for (const req of printRequests) {
+    const key = `${req.name.toLowerCase().trim()}::${req.setCode}::${req.collectorNumber}`;
 
-        if (!response.ok) {
-          console.warn(`Scryfall printing search returned status ${response.status}`);
-          break;
-        }
-
-        const json: ScryfallSearchResponse = await response.json();
-        for (const card of json.data ?? []) {
-          // Normalize game_changer boolean flag
-          card.game_changer = Boolean(card.game_changer || card['game-changer']);
-        }
-
-        // Match each requested printing against the results by set + collector number
-        for (const req of batch) {
-          const lowerName = req.name.toLowerCase().trim();
-          const key = `${lowerName}::${req.setCode}::${req.collectorNumber}`;
-          if (printMap.has(key)) continue;
-
-          const match = (json.data ?? []).find(c => {
-            if (String(c.set ?? '').toLowerCase() !== req.setCode) return false;
-            if (String(c.collector_number ?? '') !== req.collectorNumber) return false;
-            const cardName = c.name.toLowerCase().trim();
-            // Exact name, or the decklist only lists the front face of a double-faced card
-            return cardName === lowerName || cardName.startsWith(lowerName + ' /') || cardName.startsWith(lowerName + ' //');
-          });
-
-          if (match) {
-            printMap.set(key, match);
-          }
-        }
-
-        hasMore = Boolean(json.has_more);
-        page++;
-      }
-    } catch (err) {
-      console.error('Failed to fetch Scryfall printing batch:', err);
+    // Fast path: already cached by printing key
+    const cachedPrinting = await getCachedCardByPrinting(req.setCode, req.collectorNumber);
+    if (cachedPrinting) {
+      printMap.set(key, cachedPrinting);
+      continue;
     }
 
-    // Rate-limit pause if there are more batches
-    if (i + PRINT_BATCH_SIZE < printRequests.length) {
+    // Resolve Scryfall ID from the local card-data.json printings map
+    let scryfallId: string | undefined;
+    if (isCardDataReady()) {
+      scryfallId = findPrintingId(req.setCode, req.collectorNumber);
+    }
+
+    // Check the name-keyed cache by ID (the card may already be cached under its default name)
+    if (scryfallId) {
+      const byId = await getCachedCardById(scryfallId);
+      if (byId) {
+        printMap.set(key, byId);
+        newPrintCards.push(byId);
+        continue;
+      }
+    }
+
+    missingPrints.push({ ...req, scryfallId });
+  }
+
+  // 3b. Batch-fetch missing printings via /cards/collection using Scryfall IDs (75 per batch)
+  const idBatches: Array<{ name: string; setCode: string; collectorNumber: string; scryfallId: string }> = [];
+  const noIdPrints: Array<{ name: string; setCode: string; collectorNumber: string }> = [];
+
+  for (const p of missingPrints) {
+    if (p.scryfallId) {
+      idBatches.push(p as typeof idBatches[number]);
+    } else {
+      noIdPrints.push(p);
+    }
+  }
+
+  for (let i = 0; i < idBatches.length; i += BATCH_SIZE) {
+    const batch = idBatches.slice(i, i + BATCH_SIZE);
+    const identifiers = batch.map(b => ({ id: b.scryfallId }));
+
+    try {
+      const response = await fetch(SCRYFALL_COLLECTION_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'User-Agent': 'DeckSync/1.0'
+        },
+        body: JSON.stringify({ identifiers })
+      });
+
+      if (response.ok) {
+        const json: ScryfallCollectionResponse = await response.json();
+        const byId = new Map<string, ScryfallCard>();
+        for (const card of json.data ?? []) {
+          card.game_changer = Boolean(card.game_changer || card['game-changer']);
+          if (card.id) byId.set(card.id, card);
+        }
+
+        for (const req of batch) {
+          const key = `${req.name.toLowerCase().trim()}::${req.setCode}::${req.collectorNumber}`;
+          const card = byId.get(req.scryfallId!);
+          if (card) {
+            printMap.set(key, card);
+            newPrintCards.push(card);
+          }
+        }
+      } else {
+        console.warn(`Scryfall printing collection returned status ${response.status}`);
+      }
+    } catch (err) {
+      console.error('Failed to fetch Scryfall printing collection batch:', err);
+    }
+
+    if (i + BATCH_SIZE < idBatches.length) {
       await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));
     }
   }
 
-  // 4. Save newly fetched cards to IndexedDB cache
-  //    (specific printing cards are intentionally NOT cached: the cache is keyed by
-  //    card name and stores the default printing, so caching a specific set's art
-  //    would change images for future decks that don't specify a set)
+  // 3c. Fallback: for printings not in the local map (e.g. very new sets), use legacy search
+  if (noIdPrints.length > 0) {
+    for (let i = 0; i < noIdPrints.length; i += PRINT_BATCH_SIZE) {
+      const batch = noIdPrints.slice(i, i + PRINT_BATCH_SIZE);
+      const q = batch
+        .map(r => `(name:"${r.name.replace(/"/g, '')}" set:${r.setCode})`)
+        .join(' OR ');
+
+      try {
+        let page = 1;
+        let hasMore = true;
+        while (hasMore && page <= MAX_PRINT_PAGES) {
+          const url = `${SCRYFALL_SEARCH_URL}?q=${encodeURIComponent(q)}&page_size=${PRINT_PAGE_SIZE}&unique=prints&page=${page}`;
+          const response = await fetch(url, {
+            headers: { 'Accept': 'application/json', 'User-Agent': 'DeckSync/1.0' }
+          });
+
+          if (!response.ok) break;
+          const json: ScryfallSearchResponse = await response.json();
+
+          for (const req of batch) {
+            const lowerName = req.name.toLowerCase().trim();
+            const key = `${lowerName}::${req.setCode}::${req.collectorNumber}`;
+            if (printMap.has(key)) continue;
+
+            const match = (json.data ?? []).find(c => {
+              if (String(c.set ?? '').toLowerCase() !== req.setCode) return false;
+              if (String(c.collector_number ?? '') !== req.collectorNumber) return false;
+              const cardName = c.name.toLowerCase().trim();
+              return cardName === lowerName || cardName.startsWith(lowerName + ' /') || cardName.startsWith(lowerName + ' //');
+            });
+
+            if (match) {
+              match.game_changer = Boolean(match.game_changer || match['game-changer']);
+              printMap.set(key, match);
+              newPrintCards.push(match);
+            }
+          }
+
+          hasMore = Boolean(json.has_more);
+          page++;
+        }
+      } catch (err) {
+        console.error('Failed to fetch Scryfall printing search fallback:', err);
+      }
+
+      if (i + PRINT_BATCH_SIZE < noIdPrints.length) {
+        await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));
+      }
+    }
+  }
+
+  // 4. Save newly fetched cards to IndexedDB cache (both name-keyed and printing-keyed)
   if (newlyFetched.length > 0) {
     await cacheCards(newlyFetched);
+  }
+  if (newPrintCards.length > 0) {
+    // Cache by name (default representative) — dedupe by card.id to avoid overwrites
+    const uniqueByCard = new Map<string, ScryfallCard>();
+    for (const c of newPrintCards) {
+      if (c.id && !c.id.startsWith('custom-')) uniqueByCard.set(c.id, c);
+    }
+    if (uniqueByCard.size > 0) {
+      await cacheCards(Array.from(uniqueByCard.values()));
+    }
+    // Cache by printing key for zero-network reloads
+    const printEntries: Array<{ setCode: string; collectorNumber: string; card: ScryfallCard }> = [];
+    for (const [key, card] of printMap) {
+      const parts = key.split('::');
+      if (parts.length === 3) {
+        printEntries.push({ setCode: parts[1], collectorNumber: parts[2], card });
+      }
+    }
+    if (printEntries.length > 0) {
+      await cachePrintings(printEntries);
+    }
   }
 
   // 5. Attach Scryfall card data to deck items
@@ -353,9 +443,10 @@ export async function enrichDeckCards(
     }
 
     // Fallback for cards not recognized or found in collection:
-    // "just get any image": generate fallback image URI pointing to Scryfall named?fuzzy image redirect!
-    const cleanSearchName = item.name.split('/')[0].replace(/[-–—]?\s*\d+.*$/, '').trim() || item.name;
-    const fallbackImageUrl = `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cleanSearchName)}&format=image`;
+    // Use an empty image URI — the UI shows a generic card placeholder.
+    // Previously this hotlinked to api.scryfall.com's redirect endpoint, which
+    // counts against the API rate limit and breaks offline.
+    const fallbackImageUrl = '';
 
     const placeholderCard: ScryfallCard = {
       id: `custom-${item.name}`,

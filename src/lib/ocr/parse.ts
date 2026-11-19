@@ -89,9 +89,9 @@ export function parseSetAndCollector(raw: string): SetCodeParse | null {
 
   // Letter-only set codes (e.g. "ONE259" → set ONE, #259): the compact pattern
   // above would greedily parse this as ONE2 + 59. If a letter-only interpretation
-  // yields a longer collector number, prefer it (3-4 digit numbers are more
-  // plausible than 2-digit ones for modern sets).
-  const letterOnly = normalized.match(/\b([A-Z]{2,})(\d{3,4})\b/);
+  // yields a longer collector number, prefer it. Accepts 2-4 digit numbers to
+  // cover low-numbered cards in letter-only sets (e.g. "ONE01").
+  const letterOnly = normalized.match(/\b([A-Z]{2,})(\d{2,4})\b/);
   if (letterOnly && (!compact || letterOnly[2].length > compact[2].length)) {
     return { setCode: letterOnly[1], collectorNumber: stripLeadingZeros(letterOnly[2]) };
   }
@@ -101,11 +101,11 @@ export function parseSetAndCollector(raw: string): SetCodeParse | null {
   return null;
 }
 
-/** "0216" -> "216", "020/270" -> "20/270" (OCR often glues a leading zero on). */
+/** "0216" -> "216", "020/0270" -> "20/270" (OCR often glues a leading zero on). */
 function stripLeadingZeros(num: string): string {
   const slash = num.indexOf('/');
   const main = slash === -1 ? num : num.slice(0, slash);
-  const rest = slash === -1 ? '' : '/' + num.slice(slash + 1);
+  const rest = slash === -1 ? '' : '/' + num.slice(slash + 1).replace(/^0+(?=\d)/, '');
   return main.replace(/^0+(?=\d)/, '') + rest;
 }
 
@@ -141,10 +141,13 @@ function cleanNameLine(line: string): string | undefined {
 /**
  * Extracts a card-name candidate from the OCR text of the top name-bar region.
  * The card name is always the first real text on the card — frame noise sits
- * above it and art texture below it — so the earliest word-like line wins:
- * only tokens of 4+ letters count toward the score (short fragments are
- * ignored rather than penalized, since OCR glues cost/icon garbage onto the
- * end of real name lines), and a line needs a score of at least 6.
+ * above it and art texture below it — so the earliest word-like line wins.
+ *
+ * Scoring: tokens with 3+ letters contribute their letter count (lowered from
+ * 4 to catch short staples like "Opt", "Fog", "Shock"). The threshold is 3
+ * (lowered from 6) so single-word cards with 3+ letters pass. Downstream,
+ * `hasCardNameFuzzy` provides the final validation gate against the known-card
+ * database, so being slightly loose here only costs one extra lookup.
  */
 export function extractCardName(raw: string): string | undefined {
   if (!raw) return undefined;
@@ -159,9 +162,9 @@ export function extractCardName(raw: string): string | undefined {
     let score = 0;
     for (const tok of name.split(/\s+/)) {
       const letters = (tok.match(/\p{L}/gu) ?? []).length;
-      if (letters >= 4) score += letters;
+      if (letters >= 3) score += letters;
     }
-    if (score >= 6) return name;
+    if (score >= 3) return name;
   }
 
   return undefined;
