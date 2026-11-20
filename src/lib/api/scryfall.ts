@@ -10,7 +10,16 @@ const BATCH_SIZE = 75;
 const PRINT_BATCH_SIZE = 10;
 const PRINT_PAGE_SIZE = 30;
 const MAX_PRINT_PAGES = 3;
-const RATE_LIMIT_DELAY_MS = 100;
+// Scryfall allows ~1 request/second sustained (30/min burst). The old 100 ms
+// pacing let a multi-candidate lookup fire 4–5 requests in one second and burn
+// the whole budget in a single scan; 500 ms keeps us comfortably under the cap.
+const RATE_LIMIT_DELAY_MS = 500;
+// Per-request timeout + bounded retries for transient failures (timeouts,
+// network hiccups, HTTP 429 rate-limit responses, 5xx server errors).
+const FETCH_TIMEOUT_MS = 10_000;
+const MAX_FETCH_RETRIES = 2; // extra attempts after the first one
+const RETRY_BACKOFF_BASE_MS = 3_000; // backoff grows linearly: 3 s, then 6 s
+const RETRY_AFTER_CAP_MS = 10_000; // never wait longer than this per response
 
 interface ScryfallCollectionResponse {
   object: string;
@@ -471,13 +480,56 @@ export async function enrichDeckCards(
 
 // --- Camera scan lookups ---
 
+/**
+ * Fetches a Scryfall endpoint with a timeout and bounded retries:
+ * - aborts after FETCH_TIMEOUT_MS so a stalled request can't hang a scan;
+ * - retries transient failures (network errors, timeouts, HTTP 429/5xx) up to
+ *   MAX_FETCH_RETRIES times, honoring Retry-After on 429 when present;
+ * - returns non-transient responses (e.g. 404) as-is for the caller to decide.
+ * NOTE: Scryfall's API guidelines ask for a descriptive User-Agent that
+ * includes contact information — add yours to the string below before publishing.
+ */
 async function fetchScryfall(url: string): Promise<Response> {
-  return fetch(url, {
-    headers: {
-      'Accept': 'application/json',
-      'User-Agent': 'DeckSync/1.0'
+  let attempt = 0;
+  for (;;) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'DeckSync/1.0 (browser PWA)'
+        },
+        signal: controller.signal
+      });
+    } catch {
+      // Network failure or timeout — transient; retry with linear backoff.
+      clearTimeout(timeoutId);
+      if (attempt >= MAX_FETCH_RETRIES) throw new Error('Scryfall request failed after retries');
+      attempt++;
+      await sleepMs(RETRY_BACKOFF_BASE_MS * attempt);
+      continue;
     }
-  });
+    clearTimeout(timeoutId);
+
+    const retryable = response.status === 429 || response.status >= 500;
+    if (!retryable || attempt >= MAX_FETCH_RETRIES) return response;
+
+    // Drain the body so the socket can be reused, then back off.
+    await response.body?.cancel().catch(() => { /* already consumed */ });
+    const retryAfterHeader = response.headers.get('Retry-After');
+    const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : NaN;
+    const delay = Number.isFinite(retryAfterMs) && retryAfterMs > 0
+      ? Math.min(retryAfterMs, RETRY_AFTER_CAP_MS)
+      : RETRY_BACKOFF_BASE_MS * (attempt + 1);
+    attempt++;
+    await sleepMs(delay);
+  }
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
 }
 
 function normalizeCard(card: ScryfallCard): ScryfallCard {
@@ -555,6 +607,11 @@ function nameMatchTier(name: string): 0 | 1 | 2 {
   return 2;
 }
 
+/** Session-scoped negative cache for the fuzzy name endpoint: candidates Scryfall
+ *  already rejected with 404. OCR repeatedly produces the same garbage on
+ *  repeated passes over the same card, so don't burn another API call on them. */
+const knownNameMisses = new Set<string>();
+
 /**
  * Fuzzy name lookup for the card-name fallback path (older cards don't print a
  * set code). Uses the local IndexedDB cache first, and — when the card database
@@ -604,6 +661,10 @@ export async function lookupCardByName(name: string): Promise<ScryfallCard | nul
 
   let firstAttempt = true;
   for (const candidate of ordered) {
+    const missKey = candidate.toLowerCase();
+    // Skip candidates Scryfall already rejected with 404 this session.
+    if (knownNameMisses.has(missKey)) continue;
+
     // Be polite to the rate limit between attempts (skipped before the first call).
     if (!firstAttempt) await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));
     firstAttempt = false;
@@ -614,7 +675,12 @@ export async function lookupCardByName(name: string): Promise<ScryfallCard | nul
 
     try {
       const response = await fetchScryfall(`${SCRYFALL_CARD_URL}/named?fuzzy=${encodeURIComponent(candidate)}`);
-      if (!response.ok) continue; // fuzzy miss — try the next candidate
+      if (!response.ok) {
+        // 404 is a definitive "no such card" — remember it so repeated passes
+        // over the same misread don't burn another API call each time.
+        if (response.status === 404) knownNameMisses.add(missKey);
+        continue; // fuzzy miss — try the next candidate
+      }
       const card = normalizeCard((await response.json()) as ScryfallCard);
       await cacheCards([card]);
       return card;

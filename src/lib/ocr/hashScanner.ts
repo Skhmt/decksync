@@ -37,6 +37,9 @@ export interface HashScanResult {
   votes: number;
 }
 
+/** Packed 32-bit words of one frame's art-region pHash (see prepareFrameHash). */
+export type FrameHashWords = { hi: number; lo: number };
+
 /** Max width (px) a crop is downscaled to before hashing — keeps hashing cheap. */
 const MAX_CROP_WIDTH = 640;
 
@@ -133,27 +136,38 @@ export function hasCardContent(pix: PixelBuffer): boolean {
   return hi - lo >= MIN_CONTENT_RANGE;
 }
 
-/** Finds the closest index entry for one frame (null when nothing is close enough). */
+/** Finds the closest index entry for one frame (null when nothing is close enough).
+ *  `pre`, when given, is a hash already computed for this exact canvas by
+ *  prepareFrameHash() — the crop + pHash work (the expensive part) is skipped. */
 function matchFrame(
   frame: HTMLCanvasElement,
   classKey: string,
   entries: CardHashEntry[],
   packed: Record<string, PackedClass>,
   region: { x0: number; y0: number; x1: number; y1: number },
-  threshold: number
+  threshold: number,
+  pre?: FrameHashWords | null
 ): HashFrameMatch | null {
-  const pix = cropHashRegion(frame, region);
-  if (!pix) return null;
-  // Reject near-uniform crops (blank table, empty frame, hand) before hashing —
-  // they'd otherwise match some stored face by chance. OCR handles the fallback.
-  if (!hasCardContent(pix)) return null;
-  const hash = computePHashFromRGBA(pix);
+  let qHi: number;
+  let qLo: number;
+  if (pre) {
+    // Precomputed by prepareFrameHash() — skip the crop + hash entirely.
+    qHi = pre.hi;
+    qLo = pre.lo;
+  } else {
+    const pix = cropHashRegion(frame, region);
+    if (!pix) return null;
+    // Reject near-uniform crops (blank table, empty frame, hand) before hashing —
+    // they'd otherwise match some stored face by chance. OCR handles the fallback.
+    if (!hasCardContent(pix)) return null;
+    const hash = computePHashFromRGBA(pix);
+    [qHi, qLo] = splitHash(hash);
+  }
 
   // Scan the packed per-class arrays (SoA) with a tight numeric Hamming loop —
   // ~200× faster than the old per-bit string scan over every entry's variants.
   const pc = packed[classKey];
   if (!pc || pc.hi.length === 0) return null;
-  const [qHi, qLo] = splitHash(hash);
   let bestDist = 65;
   let bestSlot = -1;
   for (let i = 0; i < pc.hi.length; i++) {
@@ -169,13 +183,18 @@ function matchFrame(
 
 /**
  * Identifies a card from one or more full-frame canvases. `frameAspect` is the
- * camera's videoWidth/videoHeight — it selects which aspect class of stored
- * hashes to match against. Resolves null when the index isn't loaded or no
- * frame comes within threshold (the OCR channel then carries the scan).
+ * width/height ratio of the frames being hashed (the camera's videoWidth/videoHeight
+ * for raw frames, or the warped frame's own aspect) — it selects which aspect
+ * class of stored hashes to match against. `precomputed`, when given, carries
+ * per-frame art-region hashes already computed by prepareFrameHash() so a frame
+ * is only cropped + hashed once across multiple calls. Resolves null when the
+ * index isn't loaded or no frame comes within threshold (the OCR channel then
+ * carries the scan).
  */
 export async function identifyByHash(
   frames: HTMLCanvasElement[],
-  frameAspect: number
+  frameAspect: number,
+  precomputed?: Array<FrameHashWords | null>
 ): Promise<HashScanResult | null> {
   const idx = await ensureCardHashes();
   if (!idx.ready || idx.entries.length === 0) return null;
@@ -184,8 +203,8 @@ export async function identifyByHash(
   // Votes per entry id (a card can have several face entries — front + DFC back)
   const votes = new Map<string, { card: string; count: number; totalDist: number; bestDist: number }>();
 
-  for (const frame of frames) {
-    const m = matchFrame(frame, classKey, idx.entries, idx.packed, idx.region, idx.threshold);
+  for (let i = 0; i < frames.length; i++) {
+    const m = matchFrame(frames[i], classKey, idx.entries, idx.packed, idx.region, idx.threshold, precomputed?.[i]);
     if (!m) continue;
     const v = votes.get(m.entry.id) ?? { card: m.entry.id, count: 0, totalDist: 0, bestDist: 65 };
     v.count++;
@@ -207,4 +226,24 @@ export async function identifyByHash(
 
   const entry = idx.entries.find(e => e.id === winner.card)!;
   return { entry, distance: winner.bestDist, votes: winner.count };
+}
+
+/**
+ * Crops + hashes one frame's art region without scanning the index. Lets a
+ * caller hash a frame once and reuse the result across multiple identifyByHash
+ * calls (the scan loop does this for its first frame: early-exit check, then
+ * the full burst vote). The returned words are only valid while the canvas
+ * keeps holding the same pixels — pooled canvases that get recaptured must not
+ * reuse a stale hash. Resolves null when the index isn't loaded or the crop is
+ * too small / blank to be meaningful.
+ */
+export async function prepareFrameHash(frame: HTMLCanvasElement): Promise<FrameHashWords | null> {
+  const idx = await ensureCardHashes();
+  if (!idx.ready || idx.entries.length === 0) return null;
+  const pix = cropHashRegion(frame, idx.region);
+  if (!pix) return null;
+  // Same near-uniform rejection as matchFrame — a blank crop must never vote.
+  if (!hasCardContent(pix)) return null;
+  const [hi, lo] = splitHash(computePHashFromRGBA(pix));
+  return { hi, lo };
 }

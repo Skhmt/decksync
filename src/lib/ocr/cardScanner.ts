@@ -99,12 +99,17 @@ export interface RegionSpec extends FrameRect {
 /** Top name bar of the card (used for older cards without a printed set code). */
 export const NAME_REGION: RegionSpec = { x0: 0.02, y0: 0.03, x1: 0.98, y1: 0.12, targetHeight: 380 };
 
+/** Alternate name-bar box for legacy frames whose name sits slightly lower and
+ *  larger relative to the card (pre-1995 frame styles). Only tried as a fallback
+ *  when the primary read fails — see recognizeNameRegion(). */
+const NAME_REGION_LEGACY: RegionSpec = { x0: 0.02, y0: 0.04, x1: 0.98, y1: 0.16, targetHeight: 380 };
+
 /** Bottom-left corner of modern cards: collector number line above the set-code line. */
 export const SET_REGION: RegionSpec = { x0: 0.0, y0: 0.77, x1: 0.60, y1: 1.0, targetHeight: 300 };
 
 // --- Canvas pooling ---------------------------------------------------------
-// Continuous scanning allocates a full-resolution frame canvas (~1920x1440,
-// ~11 MB) three times every ~700 ms. Reusing a small round-robin pool instead of
+// Continuous scanning allocates a capture-sized frame canvas (~1280×960 after
+// the capture downscale, ~5 MB) three times every ~700 ms. Reusing a small round-robin pool instead of
 // calling document.createElement on every frame avoids GC churn and thermal
 // throttle on mobile. The scan loop is strictly sequential (one burst at a time),
 // so a pool sized above the burst count is safe to reuse across attempts.
@@ -136,13 +141,28 @@ function acquireRegionCanvas(): HTMLCanvasElement {
   return canvas;
 }
 
-/** Grabs the current camera frame as a full-resolution canvas. */
+/** Max capture width (px). OCR + warp work fine at this size; full-resolution
+ *  camera frames (~1920 px) just burn memory and readback bandwidth for no
+ *  recognition gain. The aspect ratio is preserved, so all fraction-based region
+ *  math (cardZoneForFrame etc.) is unaffected. */
+const MAX_CAPTURE_WIDTH = 1280;
+
+/** Grabs the current camera frame as a canvas, downscaled to at most MAX_CAPTURE_WIDTH wide. */
 export function captureFrame(video: HTMLVideoElement): HTMLCanvasElement {
   const canvas = acquireFrameCanvas();
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
+  let w = video.videoWidth;
+  let h = video.videoHeight;
+  if (w > MAX_CAPTURE_WIDTH) {
+    const scale = MAX_CAPTURE_WIDTH / w;
+    w = MAX_CAPTURE_WIDTH;
+    h = Math.max(1, Math.round(h * scale));
+  }
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(video, 0, 0, w, h);
   return canvas;
 }
 
@@ -188,10 +208,16 @@ function preprocessRegion(frame: HTMLCanvasElement, region: RegionSpec): HTMLCan
     gray[p] = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
   }
 
+  // Illumination normalization: divide out a smooth background estimate so broad
+  // lighting gradients and large specular glare patches stop dominating the crop.
+  // The percentile stretch below then operates on reflectance-like values, which
+  // is what keeps small printed text legible under uneven light or glare.
+  const norm = normalizeIllumination(gray, w, h);
+
   // Clip the bottom/top 1% of the histogram, then stretch the rest to [20, 235]
   const hist = new Uint32Array(256);
-  for (let p = 0; p < gray.length; p++) hist[gray[p]]++;
-  const total = gray.length;
+  for (let p = 0; p < norm.length; p++) hist[norm[p]]++;
+  const total = norm.length;
   let lo = 0;
   let acc = 0;
   for (let v = 0; v < 256; v++) {
@@ -211,14 +237,103 @@ function preprocessRegion(frame: HTMLCanvasElement, region: RegionSpec): HTMLCan
     }
   }
   const range = Math.max(1, hi - lo);
-  for (let p = 0, i = 0; p < gray.length; p++, i += 4) {
-    let l = 20 + ((gray[p] - lo) / range) * 215;
+  for (let p = 0, i = 0; p < norm.length; p++, i += 4) {
+    let l = 20 + ((norm[p] - lo) / range) * 215;
     if (l < 20) l = 20;
     else if (l > 235) l = 235;
     d[i] = d[i + 1] = d[i + 2] = l;
   }
   ctx.putImageData(img, 0, 0);
   return canvas;
+}
+
+/**
+ * Divides out a smooth illumination estimate from a grayscale buffer. The
+ * background is estimated by block-averaging the luma onto a coarse grid, box
+ * blurring it heavily, and bilinearly resampling back to full size — O(n) work
+ * that runs in a few ms even for ~1 MP region crops. Pixels whose background
+ * estimate is near black (out-of-card corners, deep shadows) are left untouched
+ * so the division doesn't amplify noise there; bright backgrounds (glare) are
+ * pulled down and dark ones (low light) lifted toward a mid baseline.
+ */
+function normalizeIllumination(
+  gray: Uint8ClampedArray,
+  w: number,
+  h: number
+): Uint8ClampedArray {
+  const gw = 32;
+  const gh = Math.max(4, Math.round((h / w) * gw));
+
+  // 1. Block-average the luma onto the coarse grid (background estimate seed).
+  const bg = new Float64Array(gw * gh);
+  const counts = new Float64Array(gw * gh);
+  for (let y = 0; y < h; y++) {
+    const gy = Math.min(gh - 1, ((y * gh) / h) | 0);
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      const gx = Math.min(gw - 1, ((x * gw) / w) | 0);
+      const gi = gy * gw + gx;
+      bg[gi] += gray[row + x];
+      counts[gi]++;
+    }
+  }
+  for (let i = 0; i < bg.length; i++) bg[i] = counts[i] > 0 ? bg[i] / counts[i] : 128;
+
+  // 2. Heavy box blur (two separable passes) so each cell reflects its
+  //    neighborhood — this is what makes the estimate smooth.
+  const radius = Math.max(2, gw >> 2);
+  boxBlurGrid(bg, gw, gh, radius);
+  boxBlurGrid(bg, gw, gh, radius);
+
+  // 3. Bilinear resample back to full size and divide (gain capped at ×3).
+  const out = new Uint8ClampedArray(gray.length);
+  for (let y = 0; y < h; y++) {
+    const fy = ((y + 0.5) / h) * gh - 0.5;
+    const y0 = Math.max(0, Math.floor(fy));
+    const y1 = Math.min(gh - 1, y0 + 1);
+    const ty = fy - y0;
+    for (let x = 0; x < w; x++) {
+      const fx = ((x + 0.5) / w) * gw - 0.5;
+      const x0 = Math.max(0, Math.floor(fx));
+      const x1 = Math.min(gw - 1, x0 + 1);
+      const tx = fx - x0;
+      const b =
+        (bg[y0 * gw + x0] * (1 - tx) + bg[y0 * gw + x1] * tx) * (1 - ty) +
+        (bg[y1 * gw + x0] * (1 - tx) + bg[y1 * gw + x1] * tx) * ty;
+      const p = y * w + x;
+      // Skip near-black backgrounds: dividing there only amplifies noise.
+      out[p] = b > 24 ? gray[p] * Math.min(3, 200 / b) : gray[p];
+    }
+  }
+  return out;
+}
+
+/** In-place separable box blur on a gw×gh grid (horizontal + vertical pass),
+ *  with edge clamping. `r` is the window radius in cells. */
+function boxBlurGrid(g: Float64Array, gw: number, gh: number, r: number): void {
+  const tmp = new Float64Array(gw * gh);
+  const win = 2 * r + 1;
+  for (let y = 0; y < gh; y++) {
+    let acc = 0;
+    const row = y * gw;
+    for (let x = -r; x <= r; x++) acc += g[row + Math.max(0, Math.min(gw - 1, x))];
+    for (let x = 0; x < gw; x++) {
+      tmp[row + x] = acc / win;
+      const addIdx = Math.min(gw - 1, x + r + 1);
+      const subIdx = Math.max(0, x - r);
+      acc += g[row + addIdx] - g[row + subIdx];
+    }
+  }
+  for (let x = 0; x < gw; x++) {
+    let acc = 0;
+    for (let y = -r; y <= r; y++) acc += tmp[Math.max(0, Math.min(gh - 1, y)) * gw + x];
+    for (let y = 0; y < gh; y++) {
+      g[y * gw + x] = acc / win;
+      const addIdx = Math.min(gh - 1, y + r + 1);
+      const subIdx = Math.max(0, y - r);
+      acc += tmp[addIdx * gw + x] - tmp[subIdx * gw + x];
+    }
+  }
 }
 
 export interface RegionRead {
@@ -243,8 +358,18 @@ export async function recognizeSetRegion(frame: HTMLCanvasElement): Promise<Regi
   return { ...read, parsed: parseSetAndCollector(read.text) };
 }
 
-/** OCRs the top name bar and extracts a card-name candidate from it. */
+/** OCRs the top name bar and extracts a card-name candidate from it. When the
+ *  primary box yields nothing (or very low confidence), retries with the legacy
+ *  fallback box for older frame styles before giving up on this channel. */
 export async function recognizeNameRegion(frame: HTMLCanvasElement): Promise<RegionRead & { name: string | undefined }> {
   const read = await recognizeRegion(frame, NAME_REGION);
-  return { ...read, name: extractCardName(read.text) };
+  let name = extractCardName(read.text);
+  if (!name || read.confidence < 40) {
+    const alt = await recognizeRegion(frame, NAME_REGION_LEGACY);
+    const altName = extractCardName(alt.text);
+    if (altName && (!name || alt.confidence > read.confidence)) {
+      return { text: alt.text, confidence: alt.confidence, name: altName };
+    }
+  }
+  return { text: read.text, confidence: read.confidence, name };
 }

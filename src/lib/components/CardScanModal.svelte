@@ -17,7 +17,11 @@
     recognizeNameRegion,
     recognizeSetRegion,
   } from "../ocr/cardScanner";
-  import { identifyByHash } from "../ocr/hashScanner";
+  import {
+    identifyByHash,
+    prepareFrameHash,
+    type FrameHashWords,
+  } from "../ocr/hashScanner";
   import { warpCardToCanonical, initOpenCv } from "../ocr/cardWarp";
   import type { DeckCardItem, ScryfallCard } from "../types";
   import {
@@ -213,17 +217,30 @@
       const warped1 = await warpCardToCanonical(frame1);
       const scanFrame1 = warped1 ?? frame1;
 
+      // Hash scanFrame1 once and reuse it for both the early-exit check and the
+      // full burst vote below — cropping + pHash is the expensive part, while
+      // scanning the local index over packed arrays takes only a few ms.
+      let firstFrameHash: FrameHashWords | null = null;
+
       // Early exit: single-frame pHash with a tight threshold
       if (warped1) {
         try {
-          const earlyMatch = await identifyByHash([scanFrame1], videoAspect);
-          if (token !== scanToken) return;
-          if (earlyMatch && earlyMatch.distance <= 3) {
-            const card = await lookupCardById(earlyMatch.entry.id);
+          firstFrameHash = await prepareFrameHash(scanFrame1);
+          // null means the crop was unusable — no single-frame match is possible
+          if (firstFrameHash) {
+            const earlyMatch = await identifyByHash(
+              [scanFrame1],
+              scanFrame1.width / scanFrame1.height,
+              [firstFrameHash],
+            );
             if (token !== scanToken) return;
-            if (card) {
-              handleContinuousHit(card, "hash");
-              return;
+            if (earlyMatch && earlyMatch.distance <= 3) {
+              const card = await lookupCardById(earlyMatch.entry.id);
+              if (token !== scanToken) return;
+              if (card) {
+                handleContinuousHit(card, "hash");
+                return;
+              }
             }
           }
         } catch {
@@ -231,29 +248,51 @@
         }
       }
 
-      // Full burst path: capture remaining frames for voting consensus
+      // Full burst path: capture remaining frames for voting consensus. A coarse
+      // content signature skips literally duplicated captures (the camera produced
+      // no new pixels), so one bad frame can't vote three times in the consensus.
       const frames: HTMLCanvasElement[] = [frame1];
+      let lastSig = frameSignature(frame1);
       for (let i = 1; i < BURST_FRAMES; i++) {
         await nextFrame();
         if (token !== scanToken) return;
-        frames.push(captureFrame(videoEl));
+        let burstFrame = captureFrame(videoEl);
+        let sig = frameSignature(burstFrame);
+        if (sig === lastSig) {
+          // Identical to the previous capture — wait a beat and grab a fresh one.
+          await nextFrame();
+          if (token !== scanToken) return;
+          burstFrame = captureFrame(videoEl);
+          sig = frameSignature(burstFrame);
+        }
+        frames.push(burstFrame);
+        lastSig = sig;
       }
 
       // Localize + perspective-warp each frame to a canonical upright 5:7 card.
       // Both channels prefer the warped frames when OpenCV found the card in a
       // consensus of them; otherwise they fall back to the raw frames so the
-      // existing manual-align path keeps working unchanged.
+      // existing manual-align path keeps working unchanged. frame1 was already
+      // warped above — reuse that result instead of warping it a second time.
       const minVotes = Math.ceil(BURST_FRAMES / 2);
-      const warped = await warpFrames(frames);
+      const warped = await warpFrames(frames, new Map([[frame1, warped1]]));
       const scanFrames = warped.length >= minVotes ? warped : frames;
 
       // Fastest channel first — pHash against the local index (offline, ~ms).
       // Require consensus: the same card must win at least half the burst frames,
       // so a single noisy/blank frame can't force an acceptance. Only when it
-      // finds nothing do we spend tesseract time on OCR.
+      // finds nothing do we spend tesseract time on OCR. When scanFrames starts
+      // with the already-hashed first frame (warped consensus), reuse its hash.
       const hashResult =
         scanFrames.length >= 2
-          ? await hashChannel(scanFrames, token, minVotes)
+          ? await hashChannel(
+              scanFrames,
+              token,
+              minVotes,
+              scanFrames[0] === scanFrame1 && firstFrameHash
+                ? [firstFrameHash]
+                : undefined,
+            )
           : { card: null };
       if (token !== scanToken) return;
       if (hashResult.card) {
@@ -387,9 +426,12 @@
     lastHitAt = Date.now();
   }
 
-  /** Begin the auto-action countdown for the current pending hit. */
+  /** Begin the auto-action countdown for the current pending hit. Name-based hits
+   *  are the least reliable channel (fuzzy OCR + fuzzy server match), so they
+   *  never auto-resolve — the user must tap Add/Decline explicitly. */
   function startAutoAction() {
     stopAutoAction();
+    if (pendingHit?.method === "name") return;
     autoStartedAt = Date.now();
     autoProgress = 0;
     const tick = () => {
@@ -500,6 +542,29 @@
     return new Promise((r) => setTimeout(r, BURST_INTERVAL_MS));
   }
 
+  // Coarse content signature for duplicate-capture detection (burst loop above):
+  // the frame is resampled to 32×24 and each pixel's luma quantized to 4 levels,
+  // which is robust against tiny sensor noise yet catches literally identical
+  // captures. The GPU does the downscale; only 768 pixels are read back.
+  let sigCanvas: HTMLCanvasElement | null = null;
+  function frameSignature(frame: HTMLCanvasElement): string {
+    if (!sigCanvas) sigCanvas = document.createElement("canvas");
+    const w = 32;
+    const h = 24;
+    if (sigCanvas.width !== w || sigCanvas.height !== h) {
+      sigCanvas.width = w;
+      sigCanvas.height = h;
+    }
+    const ctx = sigCanvas.getContext("2d", { willReadFrequently: true })!;
+    ctx.drawImage(frame, 0, 0, w, h);
+    const { data } = ctx.getImageData(0, 0, w, h);
+    let sig = "";
+    for (let i = 0; i < data.length; i += 4) {
+      sig += (((data[i] + data[i + 1] + data[i + 2]) / 3) >> 6).toString();
+    }
+    return sig;
+  }
+
   // --- Scan pipeline ------------------------------------------------------
 
   /** Result of the image-hash identification channel. */
@@ -507,13 +572,16 @@
     card: ScryfallCard | null;
   }
 
-  /** Warps each frame to a canonical card; returns only the frames where OpenCV found one. */
+  /** Warps each frame to a canonical card; returns only the frames where OpenCV found one.
+   *  `prewarped` carries results already computed for some of the frames (frame 1 is
+   *  warped before the early-exit check, so it must not be warped a second time). */
   async function warpFrames(
     frames: HTMLCanvasElement[],
+    prewarped?: Map<HTMLCanvasElement, HTMLCanvasElement | null>,
   ): Promise<HTMLCanvasElement[]> {
     const out: HTMLCanvasElement[] = [];
     for (const f of frames) {
-      const w = await warpCardToCanonical(f);
+      const w = prewarped?.has(f) ? prewarped.get(f)! : await warpCardToCanonical(f);
       if (w) out.push(w);
     }
     return out;
@@ -531,11 +599,13 @@
     frames: HTMLCanvasElement[],
     token: number,
     minVotes = 1,
+    prehashed?: Array<FrameHashWords | null>,
   ): Promise<ChannelResult> {
     try {
       const match = await identifyByHash(
         frames,
         frames[0].width / frames[0].height,
+        prehashed,
       );
       if (!match || match.votes < minVotes) return { card: null };
       const card = await lookupCardById(match.entry.id);
@@ -741,26 +811,35 @@
                   </button>
                 </div>
 
-                <!-- Countdown: resolves the prompt automatically after a few seconds -->
-                <div class="mt-3">
-                  <p class="mb-1 text-[10px] text-base-content/50">
-                    {mode === "collect"
-                      ? "Adding automatically…"
-                      : pendingHit.deckCard
-                        ? "Adding automatically…"
-                        : "Dismissing automatically…"}
-                  </p>
-                  <div
-                    class="h-1.5 w-full overflow-hidden rounded-full bg-base-200"
-                  >
-                    <div
-                      class="h-full rounded-full {mode === 'collect' || pendingHit.deckCard
-                        ? 'bg-success'
-                        : 'bg-warning'}"
-                      style="width: {autoProgress * 100}%"
-                    ></div>
+                <!-- Countdown: resolves the prompt automatically after a few seconds.
+                     Name-based hits are less reliable, so they wait for an explicit tap. -->
+                {#if pendingHit.method === "name"}
+                  <div class="mt-3">
+                    <p class="text-[10px] text-base-content/50">
+                      Matched by name — please confirm before it's added
+                    </p>
                   </div>
-                </div>
+                {:else}
+                  <div class="mt-3">
+                    <p class="mb-1 text-[10px] text-base-content/50">
+                      {mode === "collect"
+                        ? "Adding automatically…"
+                        : pendingHit.deckCard
+                          ? "Adding automatically…"
+                          : "Dismissing automatically…"}
+                    </p>
+                    <div
+                      class="h-1.5 w-full overflow-hidden rounded-full bg-base-200"
+                    >
+                      <div
+                        class="h-full rounded-full {mode === 'collect' || pendingHit.deckCard
+                          ? 'bg-success'
+                          : 'bg-warning'}"
+                        style="width: {autoProgress * 100}%"
+                      ></div>
+                    </div>
+                  </div>
+                {/if}
               </div>
             {/key}
           </div>
